@@ -1,0 +1,129 @@
+[project]
+name = "screen-memory-assistant"
+version = "1.0.0"
+description = "Local screen capture and memory with ML-powered search"
+authors = [
+    {name = "Screen Memory Team", email = "team@screenmemory.dev"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    # Core framework
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    
+    # Database
+    "sqlalchemy[asyncio]>=2.0.23",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.9",
+    "alembic>=1.13.0",
+    
+    # OCR - Multiple options for stability
+    "pytesseract>=0.3.10",
+    # "tesserocr>=2.6.0",  # Can be problematic to install, making optional
+    "easyocr>=1.7.0",
+    "Pillow>=10.0.0",
+    
+    # ML and Vision
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "scikit-image>=0.22.0",
+    
+    # Screenshot and system interaction
+    "pyautogui>=0.9.54",
+    "pygetwindow>=0.0.9",
+    "keyboard>=0.13.5",  # For hotkeys
+    "psutil>=5.9.0",
+    
+    # HTTP client for Martian/OpenAI
+    "httpx>=0.25.0",
+    "openai>=1.6.0",
+    
+    # Utilities
+    "click>=8.1.0",
+    "python-dotenv>=1.0.0",
+    "structlog>=23.2.0",
+    "rich>=13.7.0",  # For nice CLI output
+    
+    # Vector operations (if needed for pgvector)
+    "pgvector>=0.2.4",
+    "pyyaml>=6.0.0",  # For Docker config parsing
+]
+
+[project.optional-dependencies]
+dev = [
+    # Development and testing
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-httpx>=0.26.0",
+    "black>=23.11.0",
+    "ruff>=0.1.7",
+    "mypy>=1.7.0",
+]
+
+ocr = [
+    # Optional OCR engine - can be tricky to install
+    "tesserocr>=2.6.0",
+]
+
+ml = [
+    # Optional ML components
+    "clip @ git+https://github.com/openai/CLIP.git",
+]
+
+[project.scripts]
+screen-memory = "cli:cli"
+screen-api = "screen_api:app"
+
+[project.urls]
+Homepage = "https://github.com/your-org/screen-memory-assistant"
+Documentation = "https://github.com/your-org/screen-memory-assistant#readme"
+Repository = "https://github.com/your-org/screen-memory-assistant"
+"Bug Tracker" = "https://github.com/your-org/screen-memory-assistant/issues"
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+target-version = ["py311"]
+line-length = 100
+skip-string-normalization = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+select = ["E", "F", "W", "I", "N", "B", "A", "S", "T", "Q"]
+ignore = ["E501", "S101", "T201"]
+
+[tool.ruff.isort]
+known-first-party = ["screen_memory"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers"
+testpaths = [
+    "tests",
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"] 

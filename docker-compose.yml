@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: screenmemory
+      POSTGRES_USER: hack
+      POSTGRES_PASSWORD: hack123
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hack -d screenmemory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # OpenRouter will be used via API key - no separate service needed
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://hack:hack123@postgres:5432/screenmemory
+      - OPENAI_API_BASE=https://openrouter.ai/api/v1
+      - OPENAI_API_KEY=${OPENROUTER_API_KEY:-your-openrouter-key-here}
+    ports:
+      - "5003:5003"
+    volumes:
+      - ./screenshots:/app/screenshots
+      - ./logs:/app/logs
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw  # For X11 forwarding on Linux
+    working_dir: /app
+    command: ["/app/.venv/bin/python", "-m", "uvicorn", "screen_api:app", "--host", "0.0.0.0", "--port", "5003", "--reload"]
+
+volumes:
+  postgres_data: 
