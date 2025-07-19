@@ -7,6 +7,10 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -93,36 +97,103 @@ async def health_check():
     }
 
 
+# Background processing using FastAPI BackgroundTasks
+import uuid
+from typing import Dict, Any
+
+# Store for tracking async captures (in production, use Redis or similar)
+capture_status: Dict[str, Dict[str, Any]] = {}
+
+async def process_capture_background(capture_id: str, save_image: bool, force_vision: bool):
+    """Process capture in background using async/await"""
+    try:
+        capture_status[capture_id]["status"] = "processing"
+        
+        # Capture screen (this is already async)
+        capture_data = await capture_system.capture_screen(
+            save_image=save_image,
+            force_vision=force_vision
+        )
+        
+        # Save to database (this is already async)
+        event_id = await db.save_screen_event(capture_data)
+        
+        # Update status
+        capture_status[capture_id].update({
+            "status": "completed",
+            "event_id": event_id,
+            "capture_data": capture_data
+        })
+        
+        logger.info(f"Capture {capture_id} completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Capture {capture_id} failed: {e}")
+        capture_status[capture_id].update({
+            "status": "failed",
+            "error": str(e)
+        })
+
 # MCP-compatible endpoints
-@app.post("/capture_now", response_model=ScreenEventResponse)
-async def capture_now(request: CaptureRequest = CaptureRequest()):
+@app.post("/capture_now")
+async def capture_now(background_tasks: BackgroundTasks, request: CaptureRequest = CaptureRequest()):
     """
     MCP Tool: capture_now()
-    Take an immediate screenshot and process it
+    Take an immediate screenshot and process it asynchronously
     """
     if not capture_system:
         raise HTTPException(status_code=500, detail="Capture system not initialized")
     
     try:
-        # Capture screen
-        capture_data = await capture_system.capture_screen(
-            save_image=request.save_image,
-            force_vision=request.force_vision
+        # Generate unique capture ID
+        capture_id = str(uuid.uuid4())[:8]
+        
+        # Initialize status
+        capture_status[capture_id] = {
+            "status": "started",
+            "timestamp": datetime.utcnow(),
+            "save_image": request.save_image,
+            "force_vision": request.force_vision
+        }
+        
+        # Add to FastAPI background tasks (better than asyncio.create_task)
+        background_tasks.add_task(
+            process_capture_background, 
+            capture_id, 
+            request.save_image, 
+            request.force_vision
         )
         
-        # Save to database
-        event_id = await db.save_screen_event(capture_data)
-        
-        # Get the saved event to return
-        events = await db.get_recent_events(limit=1)
-        if events:
-            return events[0]
-        else:
-            raise HTTPException(status_code=500, detail="Failed to retrieve saved event")
+        # Return immediately
+        return {
+            "capture_id": capture_id,
+            "status": "started",
+            "message": "Capture initiated - processing in background",
+            "timestamp": datetime.utcnow()
+        }
             
     except Exception as e:
         logger.error(f"Capture failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/capture_status/{capture_id}")
+async def get_capture_status(capture_id: str):
+    """Get the status of an async capture"""
+    if capture_id not in capture_status:
+        raise HTTPException(status_code=404, detail="Capture ID not found")
+    
+    return capture_status[capture_id]
+
+
+@app.get("/active_captures")
+async def get_active_captures():
+    """Get all active/recent captures"""
+    return {
+        "active_captures": len([c for c in capture_status.values() if c["status"] in ["started", "processing"]]),
+        "total_captures": len(capture_status),
+        "captures": capture_status
+    }
 
 
 @app.post("/find", response_model=List[ScreenEventResponse])

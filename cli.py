@@ -8,6 +8,10 @@ import sys
 from datetime import datetime, timedelta
 from typing import Optional
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 import click
 import httpx
 from rich.console import Console

@@ -87,10 +87,15 @@ class Database:
         """Save a screen capture event and return the ID"""
         async with self.get_session() as session:
             try:
-                # Convert clip_vec list back to numpy array if present
+                # Convert clip_vec to string for storage (since pgvector not available)
                 clip_vec = capture_data.get('clip_vec')
-                if clip_vec and isinstance(clip_vec, list):
-                    clip_vec = np.array(clip_vec)
+                if clip_vec is not None:
+                    if isinstance(clip_vec, np.ndarray):
+                        clip_vec = str(clip_vec.tolist())
+                    elif isinstance(clip_vec, list):
+                        clip_vec = str(clip_vec)
+                    else:
+                        clip_vec = str(clip_vec)
                 
                 event = ScreenEvent(
                     ts=datetime.utcnow(),

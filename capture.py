@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 import base64
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 import cv2
 import numpy as np
 import pyautogui
@@ -385,9 +389,13 @@ class ScreenCapture:
                 elif hasattr(active_window, '_title'):
                     title = active_window._title
                 
+                # Convert to string and truncate
+                title_str = str(title) if title else "Unknown Window"
+                app_name = title_str[:50] if title_str else "Unknown App"
+                
                 return {
-                    "title": str(title) if title else "Unknown Window",
-                    "app": str(getattr(active_window, 'title', 'Unknown App'))[:50] if hasattr(active_window, 'title') else None
+                    "title": title_str,
+                    "app": app_name
                 }
         except Exception as e:
             logger.warning(f"Failed to get active window: {e}")
