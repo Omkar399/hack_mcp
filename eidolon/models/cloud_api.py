@@ -86,7 +86,7 @@ class GeminiAPI:
         if self.available:
             try:
                 genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel('gemini-1.5-flash')
+                self.model = genai.GenerativeModel('gemini-2.0-flash')
                 self.logger.info("Gemini API initialized successfully")
             except Exception as e:
                 self.logger.error(f"Failed to initialize Gemini API: {e}")
@@ -116,7 +116,7 @@ class GeminiAPI:
             
             return CloudAPIResponse(
                 content=response.text,
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash",
                 provider="gemini",
                 confidence=0.8,  # Gemini doesn't provide confidence scores
                 usage={"total_tokens": getattr(response.usage_metadata, 'total_token_count', 0)},
@@ -154,7 +154,7 @@ class GeminiAPI:
             
             return CloudAPIResponse(
                 content=response.text,
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash",
                 provider="gemini",
                 confidence=0.8,
                 usage={"total_tokens": getattr(response.usage_metadata, 'total_token_count', 0)},
@@ -1076,7 +1076,7 @@ class CloudAPIManager:
                 "default": 0.003
             },
             "gemini": {
-                "gemini-1.5-flash": 0.0015,
+                "gemini-2.0-flash": 0.0015,
                 "default": 0.0015
             },
             "openrouter": {
