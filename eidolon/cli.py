@@ -58,21 +58,57 @@ def cli(ctx, verbose, log_level):
 
 
 @cli.command()
-@click.option("--interval", "-i", type=int, default=30, 
-              help="Screenshot capture interval in seconds")
+@click.option("--interval", "-i", type=float, default=0.1, 
+              help="Screenshot capture interval in seconds (0.1 = 10 FPS for maximum performance)")
 @click.option("--background", "-b", is_flag=True, 
               help="Run in background mode")
+@click.option("--memory-limit", type=float, default=None,
+              help="Memory limit in GB (auto-detect if not specified)")
+@click.option("--low-memory", is_flag=True,
+              help="Enable low memory mode (8GB systems)")
 @click.pass_context
-def start(ctx, interval, background):
+def start(ctx, interval, background, memory_limit, low_memory):
     """Start the Eidolon system with all components."""
     logger = get_logger(__name__)
     
     try:
         click.echo("🚀 Starting Eidolon AI Personal Assistant...")
         
-        # Start observer
+        # Initialize memory optimizer
+        from .utils.memory_optimizer import get_memory_optimizer
+        import psutil
+        
+        # Determine memory limit
+        if low_memory:
+            memory_limit = 6.0
+        elif memory_limit is None:
+            total_ram_gb = psutil.virtual_memory().total / (1024**3)
+            if total_ram_gb <= 8:
+                memory_limit = 6.0
+                click.echo("⚠️  Low RAM detected - using conservative settings")
+            elif total_ram_gb <= 16:
+                memory_limit = 12.0
+                click.echo("ℹ️  Medium RAM detected - using balanced settings")
+            else:
+                memory_limit = total_ram_gb * 0.8
+        
+        # Initialize memory optimizer
+        memory_optimizer = get_memory_optimizer(memory_limit)
+        memory_stats = memory_optimizer.get_memory_usage()
+        
+        click.echo(f"💾 System RAM: {memory_stats['total_gb']:.1f}GB total, "
+                  f"{memory_stats['available_gb']:.1f}GB available")
+        click.echo(f"🎯 Memory limit set to: {memory_limit:.1f}GB")
+        
+        # UNLIMITED PERFORMANCE MODE - NO MEMORY CHECKS
+        
+        # Start observer with memory optimization
         observer = get_observer()
         observer.config.observer.capture_interval = interval
+        
+        # Set memory limit for observer
+        observer.set_memory_limit(memory_limit)
+        
         observer.start_monitoring()
         
         click.echo(f"📸 Screenshot monitoring started (interval: {interval}s)")
@@ -223,6 +259,95 @@ def cleanup(ctx, days, confirm):
         
     except Exception as e:
         click.echo(f"❌ Cleanup failed: {e}", err=True)
+
+
+@cli.group()
+@click.pass_context
+def config(ctx):
+    """Manage Eidolon configuration settings."""
+    pass
+
+
+@config.command("get")
+@click.argument("key")
+@click.pass_context
+def config_get(ctx, key):
+    """Get a configuration value."""
+    try:
+        from .utils.config import get_config
+        
+        cfg = get_config()
+        
+        # Handle nested keys like "observer.capture_interval"
+        keys = key.split('.')
+        value = cfg
+        
+        for k in keys:
+            if hasattr(value, k):
+                value = getattr(value, k)
+            else:
+                click.echo(f"❌ Configuration key '{key}' not found")
+                return
+        
+        click.echo(f"{key}: {value}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error getting config: {e}", err=True)
+
+
+@config.command("set")
+@click.argument("key")
+@click.argument("value")
+@click.pass_context
+def config_set(ctx, key, value):
+    """Set a configuration value."""
+    try:
+        click.echo(f"⚠️  Config setting is read-only in this version.")
+        click.echo(f"To set {key}={value}, use environment variables:")
+        
+        # Convert config key to environment variable
+        env_key = f"EIDOLON_{key.upper().replace('.', '_')}"
+        click.echo(f"export {env_key}={value}")
+        click.echo("Then restart Eidolon.")
+        
+    except Exception as e:
+        click.echo(f"❌ Error setting config: {e}", err=True)
+
+
+@config.command("list")
+@click.pass_context
+def config_list(ctx):
+    """List all configuration values."""
+    try:
+        from .utils.config import get_config
+        
+        cfg = get_config()
+        
+        click.echo("📋 Current Configuration:")
+        click.echo("")
+        
+        # Observer settings
+        click.echo("🔍 Observer:")
+        click.echo(f"  capture_interval: {cfg.observer.capture_interval}")
+        click.echo(f"  activity_threshold: {cfg.observer.activity_threshold}")
+        click.echo(f"  max_storage_gb: {cfg.observer.max_storage_gb}")
+        click.echo(f"  max_cpu_percent: {cfg.observer.max_cpu_percent}")
+        click.echo(f"  max_memory_mb: {cfg.observer.max_memory_mb}")
+        
+        # Memory settings
+        click.echo("\n💾 Memory:")
+        click.echo(f"  db_path: {cfg.memory.db_path}")
+        click.echo(f"  embedding_model: {cfg.memory.embedding_model}")
+        click.echo(f"  vector_dimension: {cfg.memory.vector_dimension}")
+        
+        # Analysis settings (includes cloud APIs)
+        click.echo("\n🤖 Analysis:")
+        click.echo(f"  local_models: {cfg.analysis.local_models}")
+        click.echo(f"  cloud_apis: {cfg.analysis.cloud_apis}")
+        click.echo(f"  routing: {cfg.analysis.routing}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error listing config: {e}", err=True)
 
 
 def main():

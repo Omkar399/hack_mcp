@@ -1,0 +1,50 @@
+# Eidolon Memory-Optimized Configuration
+# Optimized for systems with 8-16GB RAM
+
+# Observer settings
+observer:
+  capture_interval: 30  # Seconds between captures
+  activity_threshold: 0.15  # Higher threshold to reduce captures
+  max_screenshots_per_hour: 60  # Reduced from default
+  enable_change_detection: true
+  change_threshold: 0.1
+
+# Memory management
+memory:
+  max_ram_usage_gb: 8.0  # Maximum RAM to use
+  enable_aggressive_gc: true
+  unload_models_when_idle: true
+  max_screenshots_in_memory: 50
+  cleanup_interval_minutes: 5
+
+# Vision model settings
+vision:
+  model_size: "base"  # Use base model instead of large
+  enable_lazy_loading: true
+  unload_after_use: true
+  max_batch_size: 1
+  use_cpu_only: false  # Auto-detect best device
+
+# Analysis settings
+analysis:
+  max_concurrent_processes: 1  # Reduced for memory
+  enable_cloud_fallback: true
+  local_analysis_timeout: 30
+  
+# Database settings
+database:
+  enable_compression: true
+  max_connections: 2
+  vacuum_interval_hours: 24
+
+# Cloud API settings (to reduce local processing)
+cloud_api:
+  enable_intelligent_routing: true
+  prefer_cloud_for_complex: true
+  max_requests_per_minute: 30
+
+# Logging
+logging:
+  level: INFO
+  enable_memory_monitoring: true
+  log_memory_usage: true

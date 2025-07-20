@@ -8,6 +8,22 @@ content understanding using both local and cloud AI models.
 import os
 import re
 import warnings
+
+# Set tokenizer parallelism to avoid warnings in multiprocessing
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+# Optimize for Apple Silicon M3 GPU performance
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")  # Use maximum GPU memory
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # Enable fallback for unsupported ops
+
+# Suppress transformer warnings for cleaner output
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+
+# Also suppress warnings in transformers logging
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 import functools
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union, Tuple
@@ -186,10 +202,16 @@ class Analyzer:
         self._easyocr_reader = None
         self._easyocr_available = False
         
-        # Initialize AI models (Phase 3)
-        self._florence_model = None
+        # Initialize AI models (Phase 3) - Multi-instance for maximum performance
+        self._florence_model_pool = []
         self._florence_processor = None
-        self._florence_available = FLORENCE_AVAILABLE and self._load_florence_model()
+        self._florence_available = False
+        # Configurable model pool size from environment (default 4)
+        self._model_pool_size = int(os.environ.get('EIDOLON_MODEL_INSTANCES', '4'))
+        self._current_model_index = 0
+        
+        if FLORENCE_AVAILABLE:
+            self._florence_available = self._load_florence_model_pool()
         
         # Content classification patterns
         self._content_patterns = self._load_content_patterns()
@@ -206,6 +228,39 @@ class Analyzer:
             self.logger.warning(f"Tesseract not available: {e}")
             return False
     
+    def _load_florence_model_pool(self) -> bool:
+        """Load multiple Florence-2 model instances using parallel loading for maximum performance."""
+        if not FLORENCE_AVAILABLE:
+            self.logger.warning("Florence-2 dependencies not available")
+            return False
+        
+        try:
+            # Use parallel loader for ultra-fast startup
+            from ..utils.parallel_loader import load_florence_models_parallel, ModelLoadTimer
+            
+            with ModelLoadTimer(f"Parallel loading of {self._model_pool_size} Florence-2 instances"):
+                self._florence_model_pool, self._florence_processor, self._device = load_florence_models_parallel(
+                    self._model_pool_size
+                )
+            self.logger.info(f"Florence-2 model pool ready: {self._model_pool_size} instances on {self._device.upper()}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load Florence-2 model pool: {e}")
+            self._florence_model_pool = []
+            self._florence_processor = None
+            return False
+    
+    def _get_available_model(self):
+        """Get next available model from pool for parallel processing."""
+        if not self._florence_model_pool:
+            return None
+        
+        # Round-robin model selection for load balancing
+        model = self._florence_model_pool[self._current_model_index]
+        self._current_model_index = (self._current_model_index + 1) % len(self._florence_model_pool)
+        return model
+    
     def _load_florence_model(self) -> bool:
         """Load Florence-2 vision model for advanced image understanding."""
         if not FLORENCE_AVAILABLE:
@@ -216,20 +271,33 @@ class Analyzer:
             self.logger.info("Loading Florence-2 vision model...")
             model_name = "microsoft/Florence-2-base"
             
+            # Determine best device with M3 GPU optimization
+            device = "cpu"
+            if torch.cuda.is_available():
+                device = "cuda"
+                torch_dtype = torch.float16
+            elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+                device = "mps"
+                torch_dtype = torch.float32  # MPS optimized for M1/M2/M3
+                # Enable MPS optimizations for M3
+                torch.mps.set_per_process_memory_fraction(0.8)  # Use 80% of GPU memory
+                self.logger.info("M3 GPU optimizations enabled")
+            else:
+                torch_dtype = torch.float32
+            
             # Load model and processor
             self._florence_processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
             self._florence_model = AutoModelForCausalLM.from_pretrained(
                 model_name, 
                 trust_remote_code=True,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                torch_dtype=torch_dtype
             )
             
-            # Move to GPU if available
-            if torch.cuda.is_available():
-                self._florence_model = self._florence_model.cuda()
-                self.logger.info("Florence-2 model loaded on GPU")
-            else:
-                self.logger.info("Florence-2 model loaded on CPU")
+            # Move to best available device
+            self._florence_model = self._florence_model.to(device)
+            self._device = device
+            
+            self.logger.info(f"Florence-2 model loaded on {device.upper()}")
             
             return True
             
@@ -780,16 +848,73 @@ class Analyzer:
         Returns:
             VisionAnalysis: Vision analysis results or None if failed.
         """
-        if not self._florence_available or not self._florence_model:
+        if not self._florence_available or not self._florence_model_pool:
             # Fallback to basic AI-enhanced analysis
             return self._analyze_with_basic_ai(image_path)
         
         try:
-            # Try Florence-2 analysis first
-            return self._analyze_with_florence_model(image_path)
+            # Try Florence-2 model pool analysis for maximum performance
+            return self._analyze_with_florence_model_pool(image_path)
         except Exception as e:
-            self.logger.warning(f"Florence-2 analysis failed, using fallback: {e}")
+            self.logger.warning(f"Florence-2 model pool analysis failed, using fallback: {e}")
             return self._analyze_with_basic_ai(image_path)
+    
+    def _analyze_with_florence_model_pool(self, image_path: Union[str, Path]) -> Optional[VisionAnalysis]:
+        """Analyze using Florence-2 model pool for maximum performance."""
+        # Get available model from pool for parallel processing
+        model = self._get_available_model()
+        if not model:
+            return None
+        
+        # Load and prepare image
+        image = Image.open(image_path).convert("RGB")
+        
+        # Ultra-fast caption task with optimized parameters
+        prompt = "<MORE_DETAILED_CAPTION>"
+        inputs = self._florence_processor(text=prompt, images=image, return_tensors="pt")
+        
+        # Create proper attention mask for maximum performance
+        if 'attention_mask' not in inputs:
+            inputs['attention_mask'] = torch.ones_like(inputs['input_ids'])
+        
+        # Move inputs to GPU device for maximum speed
+        device = getattr(self, '_device', 'cpu')
+        if device != 'cpu':
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        # Generate with maximum performance parameters
+        with torch.no_grad():
+            generated_ids = model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                attention_mask=inputs["attention_mask"],
+                max_new_tokens=128,  # Reduced for maximum speed
+                do_sample=False,
+                num_beams=1,  # Fastest generation
+                pad_token_id=self._florence_processor.tokenizer.eos_token_id,
+                use_cache=True  # Enable KV cache for speed
+            )
+        
+        # Decode results
+        generated_text = self._florence_processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+        parsed_answer = self._florence_processor.post_process_generation(
+            generated_text, 
+            task=prompt, 
+            image_size=(image.width, image.height)
+        )
+        
+        # Extract description
+        description = parsed_answer.get(prompt, "")
+        if isinstance(description, dict):
+            description = description.get("text", str(description))
+        
+        # Create VisionAnalysis with fast processing
+        return VisionAnalysis(
+            description=description,
+            objects=[],
+            scene_type="unknown",
+            confidence=0.85  # High confidence for fast processing
+        )
     
     def _analyze_with_florence_model(self, image_path: Union[str, Path]) -> Optional[VisionAnalysis]:
         """Analyze using Florence-2 model."""
@@ -800,17 +925,25 @@ class Analyzer:
         prompt = "<MORE_DETAILED_CAPTION>"
         inputs = self._florence_processor(text=prompt, images=image, return_tensors="pt")
         
-        # Move to same device as model
-        if torch.cuda.is_available():
-            inputs = {k: v.cuda() for k, v in inputs.items()}
+        # Create proper attention mask to avoid warnings
+        if 'attention_mask' not in inputs:
+            inputs['attention_mask'] = torch.ones_like(inputs['input_ids'])
         
-        # Generate with simpler parameters
+        # Move inputs to same device as model
+        device = getattr(self, '_device', 'cpu')
+        if device != 'cpu':
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+        
+        # Generate with optimized parameters for M3 GPU
         with torch.no_grad():
             generated_ids = self._florence_model.generate(
                 input_ids=inputs["input_ids"],
                 pixel_values=inputs["pixel_values"],
-                max_new_tokens=512,
-                do_sample=False
+                attention_mask=inputs["attention_mask"],
+                max_new_tokens=256,  # Reduced for faster processing
+                do_sample=False,
+                num_beams=1,  # Faster than beam search
+                pad_token_id=self._florence_processor.tokenizer.eos_token_id
             )
         
         # Decode results

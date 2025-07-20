@@ -6,6 +6,7 @@ SQLite database for storing screenshot metadata, OCR results, and content analys
 
 import sqlite3
 import json
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
@@ -188,16 +189,45 @@ class MetadataDatabase:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
+            # Ensure timestamp is a string for SQLite
+            timestamp_str = data.get('timestamp')
+            if timestamp_str is None:
+                timestamp_str = datetime.now().isoformat()
+            elif isinstance(timestamp_str, datetime):
+                timestamp_str = timestamp_str.isoformat()
+            elif not isinstance(timestamp_str, str):
+                timestamp_str = str(timestamp_str)
+            
+            # Handle size tuple/list - ensure we have valid dimensions
+            width = None
+            height = None
+            if data.get('size'):
+                if isinstance(data['size'], (list, tuple)) and len(data['size']) >= 2:
+                    width = int(data['size'][0]) if data['size'][0] else 0
+                    height = int(data['size'][1]) if data['size'][1] else 0
+            
+            # Fallback for missing dimensions
+            if width is None or height is None:
+                width = width or 1920  # Default width
+                height = height or 1080  # Default height
+            
+            # Validate required fields
+            hash_val = str(data.get('hash', ''))
+            if not hash_val:
+                hash_val = f"missing_hash_{int(time.time())}"
+            
+            file_path_val = str(data.get('file_path', ''))
+            
             cursor.execute("""
                 INSERT OR REPLACE INTO screenshots 
                 (hash, file_path, timestamp, width, height, size_bytes, window_info, monitor_info)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                data['hash'],
-                data['file_path'],
-                data['timestamp'],
-                data['size'][0] if data['size'] else None,  # width
-                data['size'][1] if data['size'] else None,  # height
+                hash_val,
+                file_path_val,
+                timestamp_str,
+                width,
+                height,
                 data.get('file_size') or data.get('size_bytes'),
                 json.dumps(data.get('window_info', {})),
                 json.dumps(data.get('monitor_info', {}))

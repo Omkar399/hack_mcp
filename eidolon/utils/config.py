@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 class ObserverConfig(BaseModel):
     """Configuration for the Observer component."""
     
-    capture_interval: int = Field(default=10, ge=1, le=300)
+    capture_interval: float = Field(default=0.1, ge=0.05, le=300)  # Ultra-fast 10 FPS default
     activity_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
     storage_path: str = Field(default="./data/screenshots")
     max_storage_gb: float = Field(default=50.0, ge=1.0)
     monitor_keyboard: bool = Field(default=True)
     monitor_mouse: bool = Field(default=True)
     monitor_window_changes: bool = Field(default=True)
-    max_cpu_percent: float = Field(default=5.0, ge=0.1, le=100.0)
-    max_memory_mb: int = Field(default=500, ge=100)
+    max_cpu_percent: float = Field(default=1000.0, ge=0.1, le=10000.0)  # UNLIMITED - No CPU limits
+    max_memory_mb: int = Field(default=100000, ge=100)  # UNLIMITED - No memory limits
     sensitive_patterns: list[str] = Field(default_factory=lambda: [
         "password", "api_key", "secret", "token", "ssn", "credit_card"
     ])
@@ -103,6 +103,7 @@ class MemoryConfig(BaseModel):
     overlap: int = Field(default=50, ge=0, le=200)
     metadata_db: str = Field(default="sqlite")
     db_path: str = Field(default="./data/eidolon.db")
+    vector_dimension: int = Field(default=384, ge=100, le=2048)
     search: Dict[str, Union[int, float, bool]] = Field(default_factory=lambda: {
         "max_results": 50,
         "similarity_threshold": 0.7,

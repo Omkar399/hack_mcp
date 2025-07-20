@@ -30,9 +30,9 @@ pip install -q -r requirements.txt
 echo "📁 Setting up data directories..."
 mkdir -p data/{screenshots,database,logs}
 
-# Start the system
-echo "🎯 Starting Eidolon system..."
-python -m eidolon start --background
+# Start the system for MAXIMUM real-time performance (10 FPS)
+echo "🎯 Starting Eidolon system for ULTRA-FAST 10 FPS processing..."
+python -m eidolon start --interval 0.1 --memory-limit 28.0 --background
 
 echo "✅ Eidolon is now running in the background!"
 echo "💡 Use 'python -m eidolon status' to check system status"

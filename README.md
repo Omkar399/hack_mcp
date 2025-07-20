@@ -47,6 +47,18 @@ cd eidolon
    ```
 
 3. **Start the System**
+
+   **For 8GB RAM systems:**
+   ```bash
+   python -m eidolon start --low-memory --interval 60
+   ```
+   
+   **For 16GB RAM systems:**
+   ```bash
+   python -m eidolon start --memory-limit 12.0
+   ```
+   
+   **For 32GB+ RAM systems:**
    ```bash
    python -m eidolon start
    ```
@@ -56,11 +68,11 @@ cd eidolon
 ### Basic Commands
 
 ```bash
-# Start the complete system
+# Start the complete system (auto-detects RAM)
 python -m eidolon start
 
-# Start in background mode
-python -m eidolon start --background
+# Start with memory optimization
+python -m eidolon start --low-memory --background
 
 # Search your digital history
 python -m eidolon search "meeting notes"
@@ -69,15 +81,31 @@ python -m eidolon search "Python code from yesterday"
 # Interactive chat with your data
 python -m eidolon chat
 
-# Check system status
+# Check system status and memory usage
 python -m eidolon status
 
 # Stop the system
 python -m eidolon stop
 
-# Clean up old data
+# Clean up old data to free memory
 python -m eidolon cleanup --days 30
 ```
+
+### Memory Optimization
+
+**If you experience high memory usage or crashes:**
+
+```bash
+# Emergency low-memory mode
+export EIDOLON_USE_CPU_ONLY=1
+python -m eidolon start --low-memory --interval 120
+
+# Disable local vision processing
+export EIDOLON_DISABLE_LOCAL_VISION=1
+python -m eidolon start --memory-limit 4.0
+```
+
+**For detailed memory optimization:** See [Memory Optimization Guide](docs/memory_optimization.md)
 
 ### Scripts and Utilities
 
