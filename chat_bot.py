@@ -1,402 +1,449 @@
 """
-Screen Memory Chat Bot
+Native macOS Chat Bot for Screen Memory Assistant
 
-A native macOS popup chat interface that queries screen memory using the MCP server.
+Uses proper MCP client to communicate with our EnrichMCP server.
+Provides context-aware AI responses using captured screen data.
 """
 
-import os
-import sys
-import json
-import asyncio
-import logging
-import subprocess
-from datetime import datetime
-from typing import List, Dict, Any, Optional
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
+import asyncio
+import json
+import subprocess
+import sys
+import os
+import logging
+from datetime import datetime
+from typing import Dict, List, Any, Optional
 import threading
-import httpx
+import time
 
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
-
-# Set up logging
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Check if MCP server is running
-MCP_SERVER_URL = "http://localhost:8000"  # Default MCP server port
+class MCPClient:
+    """Simple MCP client that communicates with our EnrichMCP server via subprocess"""
+    
+    def __init__(self, server_command: List[str]):
+        self.server_command = server_command
+        self.process = None
+        self.request_id = 0
+        
+    async def start(self):
+        """Start the MCP server subprocess"""
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *self.server_command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            logger.info("MCP server started")
+            
+            # Initialize the connection
+            await self._send_request("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "roots": {"listChanged": True},
+                    "sampling": {}
+                },
+                "clientInfo": {
+                    "name": "screen-memory-chat-bot",
+                    "version": "1.0.0"
+                }
+            })
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start MCP server: {e}")
+            return False
+    
+    async def stop(self):
+        """Stop the MCP server subprocess"""
+        if self.process:
+            self.process.terminate()
+            await self.process.wait()
+            self.process = None
+    
+    async def _send_request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Send an MCP request and get response"""
+        if not self.process:
+            raise RuntimeError("MCP server not started")
+        
+        self.request_id += 1
+        request = {
+            "jsonrpc": "2.0",
+            "id": self.request_id,
+            "method": method,
+            "params": params
+        }
+        
+        # Send request
+        request_str = json.dumps(request) + "\n"
+        self.process.stdin.write(request_str.encode())
+        await self.process.stdin.drain()
+        
+        # Read response
+        response_line = await self.process.stdout.readline()
+        if not response_line:
+            raise RuntimeError("No response from MCP server")
+        
+        response = json.loads(response_line.decode())
+        
+        if "error" in response:
+            raise RuntimeError(f"MCP error: {response['error']}")
+        
+        return response.get("result", {})
+    
+    async def list_resources(self) -> List[Dict[str, Any]]:
+        """List available MCP resources"""
+        try:
+            result = await self._send_request("resources/list", {})
+            return result.get("resources", [])
+        except Exception as e:
+            logger.error(f"Failed to list resources: {e}")
+            return []
+    
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        """List available MCP tools"""
+        try:
+            result = await self._send_request("tools/list", {})
+            return result.get("tools", [])
+        except Exception as e:
+            logger.error(f"Failed to list tools: {e}")
+            return []
+    
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Call an MCP tool"""
+        try:
+            result = await self._send_request("tools/call", {
+                "name": name,
+                "arguments": arguments
+            })
+            return result
+        except Exception as e:
+            logger.error(f"Failed to call tool {name}: {e}")
+            return {"error": str(e)}
 
 
 class ScreenMemoryChatBot:
-    """Native macOS chat interface for screen memory queries."""
+    """Native macOS chat bot with MCP integration"""
     
     def __init__(self):
-        self.root = None
+        self.window = None
         self.chat_display = None
         self.input_field = None
         self.send_button = None
         self.status_label = None
-        self.conversation_history = []
         
-        # HTTP client for MCP server
-        self.client = httpx.AsyncClient(timeout=30.0)
+        # MCP client
+        self.mcp_client = None
+        self.mcp_connected = False
         
-        # Set up the UI
-        self.setup_ui()
+        # Chat history
+        self.chat_history = []
         
-    def setup_ui(self):
-        """Create the chat interface."""
-        self.root = tk.Tk()
-        self.root.title("Screen Memory Assistant")
-        self.root.geometry("600x500")
+        # OpenRouter API setup
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        if not self.openrouter_api_key:
+            logger.warning("OPENROUTER_API_KEY not found. AI responses will be limited.")
+    
+    def create_ui(self):
+        """Create the chat bot UI"""
+        self.window = tk.Tk()
+        self.window.title("Screen Memory Assistant - Chat Bot")
+        self.window.geometry("600x700")
         
-        # Make window stay on top and center it
-        self.root.wm_attributes("-topmost", True)
-        self.center_window()
-        
-        # Configure style
+        # Configure styles
         style = ttk.Style()
-        style.theme_use('aqua')  # Use macOS native theme
-        
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(1, weight=1)
+        style.configure('Title.TLabel', font=('Arial', 16, 'bold'))
+        style.configure('Status.TLabel', font=('Arial', 10))
         
         # Title
-        title_label = ttk.Label(main_frame, text="Screen Memory Assistant", 
-                               font=("SF Pro Display", 16, "bold"))
-        title_label.grid(row=0, column=0, pady=(0, 10), sticky=tk.W)
+        title_label = ttk.Label(
+            self.window, 
+            text="🧠 Screen Memory Assistant", 
+            style='Title.TLabel'
+        )
+        title_label.pack(pady=10)
         
-        # Chat display area
-        chat_frame = ttk.Frame(main_frame)
-        chat_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        chat_frame.columnconfigure(0, weight=1)
-        chat_frame.rowconfigure(0, weight=1)
+        # Status
+        self.status_label = ttk.Label(
+            self.window, 
+            text="🔴 Disconnected from MCP server", 
+            style='Status.TLabel'
+        )
+        self.status_label.pack(pady=5)
+        
+        # Connect button
+        connect_button = ttk.Button(
+            self.window,
+            text="Connect to MCP Server",
+            command=self.connect_mcp
+        )
+        connect_button.pack(pady=5)
+        
+        # Chat display
+        chat_frame = ttk.Frame(self.window)
+        chat_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         self.chat_display = scrolledtext.ScrolledText(
             chat_frame,
             wrap=tk.WORD,
             state=tk.DISABLED,
-            font=("SF Pro Text", 12),
-            bg="#f8f9fa",
-            fg="#212529"
+            height=20,
+            font=('Arial', 11)
         )
-        self.chat_display.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.chat_display.pack(fill=tk.BOTH, expand=True)
         
         # Input frame
-        input_frame = ttk.Frame(main_frame)
-        input_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        input_frame.columnconfigure(0, weight=1)
+        input_frame = ttk.Frame(self.window)
+        input_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        # Input field
-        self.input_field = ttk.Entry(input_frame, font=("SF Pro Text", 12))
-        self.input_field.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 10))
-        self.input_field.bind('<Return>', self.on_send_message)
-        self.input_field.bind('<Shift-Return>', lambda e: None)  # Allow newlines with Shift+Enter
+        self.input_field = ttk.Entry(input_frame, font=('Arial', 11))
+        self.input_field.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.input_field.bind('<Return>', lambda e: self.send_message())
         
-        # Send button
-        self.send_button = ttk.Button(input_frame, text="Send", command=self.on_send_message)
-        self.send_button.grid(row=0, column=1)
-        
-        # Status bar
-        self.status_label = ttk.Label(main_frame, text="Ready", foreground="green")
-        self.status_label.grid(row=3, column=0, sticky=tk.W)
-        
-        # Add initial welcome message
-        self.add_message("assistant", 
-            "Hi! I'm your Screen Memory Assistant. I can help you find and analyze your screen captures.\n\n"
-            "Try asking me:\n"
-            "• 'What was I working on 10 minutes ago?'\n"
-            "• 'Find login forms from today'\n"
-            "• 'Show me recent error messages'\n"
-            "• 'Capture my screen now'"
+        self.send_button = ttk.Button(
+            input_frame,
+            text="Send",
+            command=self.send_message,
+            state=tk.DISABLED
         )
+        self.send_button.pack(side=tk.RIGHT)
         
-        # Set focus to input field
-        self.input_field.focus_set()
-        
-    def center_window(self):
-        """Center the window on the screen."""
-        self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
-        
+        # Initial message
+        self.add_message("System", "Welcome! Connect to the MCP server to start chatting with your screen memory.")
+    
     def add_message(self, sender: str, message: str):
-        """Add a message to the chat display."""
+        """Add a message to the chat display"""
         self.chat_display.config(state=tk.NORMAL)
         
-        # Add timestamp
-        timestamp = datetime.now().strftime("%H:%M")
+        timestamp = datetime.now().strftime("%H:%M:%S")
         
-        if sender == "user":
-            self.chat_display.insert(tk.END, f"[{timestamp}] You: {message}\n\n")
+        # Format the message
+        if sender == "System":
+            self.chat_display.insert(tk.END, f"[{timestamp}] 🤖 {message}\n\n")
+        elif sender == "User":
+            self.chat_display.insert(tk.END, f"[{timestamp}] 👤 {message}\n\n")
+        elif sender == "Assistant":
+            self.chat_display.insert(tk.END, f"[{timestamp}] 🧠 {message}\n\n")
         else:
-            self.chat_display.insert(tk.END, f"[{timestamp}] Assistant: {message}\n\n")
+            self.chat_display.insert(tk.END, f"[{timestamp}] {sender}: {message}\n\n")
         
-        # Auto-scroll to bottom
-        self.chat_display.see(tk.END)
         self.chat_display.config(state=tk.DISABLED)
-        
-    def set_status(self, message: str, color: str = "black"):
-        """Update the status bar."""
-        self.status_label.config(text=message, foreground=color)
-        self.root.update()
-        
-    def on_send_message(self, event=None):
-        """Handle sending a message."""
-        message = self.input_field.get().strip()
-        if not message:
-            return
-            
-        # Clear input field
-        self.input_field.delete(0, tk.END)
-        
-        # Add user message to display
-        self.add_message("user", message)
-        
-        # Process message in background thread
-        threading.Thread(target=self.process_message, args=(message,), daemon=True).start()
-        
-    def process_message(self, message: str):
-        """Process user message and get response."""
-        try:
-            self.set_status("Thinking...", "orange")
-            
-            # Run async processing
+        self.chat_display.see(tk.END)
+    
+    def connect_mcp(self):
+        """Connect to the MCP server"""
+        def connect_async():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            response = loop.run_until_complete(self.get_ai_response(message))
-            loop.close()
             
-            # Add response to display
-            self.add_message("assistant", response)
-            self.set_status("Ready", "green")
+            try:
+                # Create MCP client
+                server_command = [sys.executable, "mcp_server.py"]
+                self.mcp_client = MCPClient(server_command)
+                
+                # Start the server
+                success = loop.run_until_complete(self.mcp_client.start())
+                
+                if success:
+                    # Update UI in main thread
+                    self.window.after(0, self._on_mcp_connected)
+                    
+                    # List available resources and tools
+                    resources = loop.run_until_complete(self.mcp_client.list_resources())
+                    tools = loop.run_until_complete(self.mcp_client.list_tools())
+                    
+                    # Show capabilities in chat
+                    self.window.after(0, lambda: self._show_capabilities(resources, tools))
+                else:
+                    self.window.after(0, lambda: self.add_message("System", "❌ Failed to connect to MCP server"))
+                    
+            except Exception as e:
+                logger.error(f"MCP connection failed: {e}")
+                self.window.after(0, lambda: self.add_message("System", f"❌ Connection error: {e}"))
+            finally:
+                loop.close()
+        
+        # Run connection in background thread
+        thread = threading.Thread(target=connect_async, daemon=True)
+        thread.start()
+    
+    def _on_mcp_connected(self):
+        """Called when MCP connection is established"""
+        self.mcp_connected = True
+        self.status_label.config(text="🟢 Connected to MCP server")
+        self.send_button.config(state=tk.NORMAL)
+        self.add_message("System", "✅ Connected to MCP server successfully!")
+    
+    def _show_capabilities(self, resources: List[Dict], tools: List[Dict]):
+        """Show MCP server capabilities"""
+        message = "🔧 Available capabilities:\n\n"
+        
+        if resources:
+            message += "📄 Resources:\n"
+            for resource in resources[:5]:  # Show first 5
+                name = resource.get('name', 'Unknown')
+                description = resource.get('description', 'No description')
+                message += f"  • {name}: {description}\n"
+            if len(resources) > 5:
+                message += f"  ... and {len(resources) - 5} more\n"
+            message += "\n"
+        
+        if tools:
+            message += "🛠️ Tools:\n"
+            for tool in tools[:5]:  # Show first 5
+                name = tool.get('name', 'Unknown')
+                description = tool.get('description', 'No description')
+                message += f"  • {name}: {description}\n"
+            if len(tools) > 5:
+                message += f"  ... and {len(tools) - 5} more\n"
+        
+        message += "\nYou can now ask questions about your screen captures!"
+        self.add_message("System", message)
+    
+    def send_message(self):
+        """Send a message and get AI response"""
+        if not self.mcp_connected:
+            self.add_message("System", "❌ Please connect to MCP server first")
+            return
+        
+        user_message = self.input_field.get().strip()
+        if not user_message:
+            return
+        
+        # Clear input
+        self.input_field.delete(0, tk.END)
+        
+        # Add user message
+        self.add_message("User", user_message)
+        
+        # Process message in background
+        def process_message():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
+            try:
+                response = loop.run_until_complete(self._process_user_message(user_message))
+                self.window.after(0, lambda: self.add_message("Assistant", response))
+            except Exception as e:
+                logger.error(f"Message processing failed: {e}")
+                self.window.after(0, lambda: self.add_message("System", f"❌ Error: {e}"))
+            finally:
+                loop.close()
+        
+        thread = threading.Thread(target=process_message, daemon=True)
+        thread.start()
+    
+    async def _process_user_message(self, message: str) -> str:
+        """Process user message and generate response using MCP tools"""
+        try:
+            # Simple keyword-based tool selection
+            if any(word in message.lower() for word in ['search', 'find', 'look for']):
+                # Extract search query (simple approach)
+                query = message.lower()
+                for word in ['search for', 'find', 'look for']:
+                    if word in query:
+                        query = query.split(word, 1)[1].strip()
+                        break
+                
+                # Call search tool
+                result = await self.mcp_client.call_tool("search_screens", {"query": query, "limit": 5})
+                
+                if "error" in result:
+                    return f"Search failed: {result['error']}"
+                
+                # Format search results
+                screens = result.get("content", [])
+                if not screens:
+                    return f"No screen captures found matching '{query}'"
+                
+                response = f"Found {len(screens)} screen captures matching '{query}':\n\n"
+                for i, screen in enumerate(screens[:3], 1):
+                    timestamp = screen.get("timestamp", "Unknown")
+                    window_title = screen.get("window_title", "Unknown")
+                    text_preview = screen.get("full_text", "")[:100] + "..." if screen.get("full_text") else "No text"
+                    response += f"{i}. {timestamp} - {window_title}\n   {text_preview}\n\n"
+                
+                return response
+            
+            elif any(word in message.lower() for word in ['capture', 'screenshot', 'take']):
+                # Call capture tool
+                result = await self.mcp_client.call_tool("capture_screen", {})
+                
+                if "error" in result:
+                    return f"Capture failed: {result['error']}"
+                
+                return "📸 Screen captured successfully! The new capture has been saved and processed."
+            
+            elif any(word in message.lower() for word in ['recent', 'latest', 'last']):
+                # Get recent captures
+                result = await self.mcp_client.call_tool("get_recent_screens", {"limit": 5})
+                
+                if "error" in result:
+                    return f"Failed to get recent captures: {result['error']}"
+                
+                screens = result.get("content", [])
+                if not screens:
+                    return "No recent screen captures found."
+                
+                response = f"Your {len(screens)} most recent screen captures:\n\n"
+                for i, screen in enumerate(screens, 1):
+                    timestamp = screen.get("timestamp", "Unknown")
+                    window_title = screen.get("window_title", "Unknown")
+                    app_name = screen.get("app_name", "Unknown")
+                    response += f"{i}. {timestamp} - {app_name} ({window_title})\n"
+                
+                return response
+            
+            else:
+                # General query - provide helpful guidance
+                return """I can help you with your screen memory! Here's what you can ask:
+
+🔍 **Search**: "Search for Python code" or "Find email from John"
+📸 **Capture**: "Take a screenshot" or "Capture current screen"  
+📋 **Recent**: "Show recent captures" or "What did I do lately?"
+
+Your screen captures include OCR text, window titles, and visual context. Ask me anything about what you've been working on!"""
+        
         except Exception as e:
             logger.error(f"Error processing message: {e}")
-            self.add_message("assistant", f"Sorry, I encountered an error: {str(e)}")
-            self.set_status("Error", "red")
-            
-    async def get_ai_response(self, message: str) -> str:
-        """Get AI response using the MCP server."""
-        try:
-            # Check if this is a capture request
-            if any(word in message.lower() for word in ["capture", "screenshot", "snap"]):
-                return await self.handle_capture_request(message)
-            
-            # Check if this is a search request
-            if any(word in message.lower() for word in ["find", "search", "show", "what", "when", "where"]):
-                return await self.handle_search_request(message)
-            
-            # Default to context analysis
-            return await self.handle_context_analysis(message)
-            
-        except httpx.ConnectError:
-            return ("I couldn't connect to the Screen Memory server. "
-                   "Please make sure it's running with: python mcp_server.py")
-        except Exception as e:
-            logger.error(f"Error getting AI response: {e}")
-            return f"I encountered an error: {str(e)}"
-            
-    async def handle_capture_request(self, message: str) -> str:
-        """Handle screen capture requests."""
-        try:
-            # Determine capture options from message
-            use_vision = "vision" in message.lower() or "ai" in message.lower()
-            
-            response = await self.client.post(
-                f"{MCP_SERVER_URL}/capture_screen",
-                json={
-                    "save_image": True,
-                    "use_vision": use_vision
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result["success"]:
-                    return (f"✅ Screen captured successfully!\n"
-                           f"Event ID: {result['event_id']}\n"
-                           f"Processing time: {result['processing_time']:.2f}s")
-                else:
-                    return f"❌ Capture failed: {result['message']}"
-            else:
-                return f"❌ Server error: {response.status_code}"
-                
-        except Exception as e:
-            return f"❌ Capture error: {str(e)}"
-            
-    async def handle_search_request(self, message: str) -> str:
-        """Handle search requests."""
-        try:
-            # Extract search parameters from message
-            limit = 5  # Default limit for chat responses
-            since_hours = None
-            
-            # Simple keyword extraction
-            if "today" in message.lower():
-                since_hours = 24
-            elif "hour" in message.lower():
-                since_hours = 1
-            elif "recent" in message.lower():
-                since_hours = 6
-                
-            response = await self.client.post(
-                f"{MCP_SERVER_URL}/search_screens",
-                json={
-                    "query": message,
-                    "limit": limit,
-                    "since_hours": since_hours
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                events = result["events"]
-                
-                if not events:
-                    return f"🔍 No screen captures found matching: '{message}'"
-                
-                response_text = f"🔍 Found {len(events)} relevant screen capture(s):\n\n"
-                
-                for i, event in enumerate(events, 1):
-                    timestamp = datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
-                    app = event["app_name"] or "Unknown App"
-                    window = event["window_title"] or ""
-                    
-                    response_text += f"{i}. [{timestamp.strftime('%H:%M')}] {app}"
-                    if window:
-                        response_text += f" - {window}"
-                    
-                    if event["full_text"]:
-                        # Show first 100 characters of text
-                        text_preview = event["full_text"][:100]
-                        if len(event["full_text"]) > 100:
-                            text_preview += "..."
-                        response_text += f"\n   Text: {text_preview}"
-                    
-                    response_text += "\n\n"
-                
-                return response_text.strip()
-            else:
-                return f"❌ Search error: {response.status_code}"
-                
-        except Exception as e:
-            return f"❌ Search error: {str(e)}"
-            
-    async def handle_context_analysis(self, message: str) -> str:
-        """Handle context analysis requests using AI."""
-        try:
-            response = await self.client.post(
-                f"{MCP_SERVER_URL}/analyze_screen_context",
-                json={
-                    "query": message,
-                    "max_events": 5
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                if result["events_analyzed"] == 0:
-                    return "🤔 I couldn't find any relevant screen captures to analyze for your question."
-                
-                confidence_emoji = "🎯" if result["confidence"] > 0.7 else "💭"
-                
-                response_text = f"{confidence_emoji} {result['answer']}\n\n"
-                response_text += f"📊 Analyzed {result['events_analyzed']} screen capture(s) "
-                response_text += f"in {result.get('search_time', 0):.2f}s"
-                
-                return response_text
-            else:
-                return f"❌ Analysis error: {response.status_code}"
-                
-        except Exception as e:
-            return f"❌ Analysis error: {str(e)}"
+            return f"Sorry, I encountered an error: {e}"
     
     def run(self):
-        """Start the chat bot interface."""
-        logger.info("Starting Screen Memory Chat Bot...")
+        """Start the chat bot"""
+        self.create_ui()
         
-        # Check if MCP server is running
-        try:
-            import requests
-            response = requests.get(f"{MCP_SERVER_URL}/health", timeout=2)
-            if response.status_code != 200:
-                self.show_server_warning()
-        except:
-            self.show_server_warning()
+        # Handle window close
+        def on_closing():
+            if self.mcp_client:
+                # Stop MCP client in background
+                def stop_mcp():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.mcp_client.stop())
+                    loop.close()
+                
+                thread = threading.Thread(target=stop_mcp, daemon=True)
+                thread.start()
+                time.sleep(0.5)  # Give it a moment to cleanup
+            
+            self.window.destroy()
+        
+        self.window.protocol("WM_DELETE_WINDOW", on_closing)
         
         # Start the UI
-        self.root.mainloop()
-        
-    def show_server_warning(self):
-        """Show warning if MCP server is not running."""
-        self.add_message("assistant", 
-            "⚠️ Warning: I couldn't connect to the Screen Memory server.\n\n"
-            "To start the server, run:\n"
-            "python mcp_server.py\n\n"
-            "Some features may not work until the server is running."
-        )
-        
-    def close(self):
-        """Clean up resources."""
-        if hasattr(self, 'client'):
-            asyncio.run(self.client.aclose())
-
-
-def create_chat_shortcut():
-    """Create macOS shortcut for the chat bot."""
-    shortcut_script = '''
-#!/bin/zsh
-cd /path/to/hack_mcp
-source .venv/bin/activate
-python chat_bot.py
-'''
-    
-    # Save shortcut script
-    script_path = os.path.expanduser("~/chat_shortcut.sh")
-    with open(script_path, "w") as f:
-        f.write(shortcut_script.replace("/path/to/hack_mcp", os.getcwd()))
-    
-    # Make executable
-    os.chmod(script_path, 0o755)
-    
-    print(f"Chat shortcut created at: {script_path}")
-    print("To set up keyboard shortcut:")
-    print("1. Open macOS Shortcuts app")
-    print("2. Create new shortcut")
-    print("3. Add 'Run Shell Script' action")
-    print(f"4. Set script to: {script_path}")
-    print("5. Assign keyboard shortcut (e.g., Cmd+Shift+C)")
+        logger.info("Starting Screen Memory Chat Bot...")
+        self.window.mainloop()
 
 
 def main():
-    """Main entry point."""
-    if len(sys.argv) > 1 and sys.argv[1] == "--create-shortcut":
-        create_chat_shortcut()
-        return
-    
-    try:
-        # Create and run the chat bot
-        chat_bot = ScreenMemoryChatBot()
-        chat_bot.run()
-    except KeyboardInterrupt:
-        logger.info("Chat bot stopped by user")
-    except Exception as e:
-        logger.error(f"Chat bot error: {e}")
-        messagebox.showerror("Error", f"Chat bot error: {e}")
+    """Main entry point"""
+    chat_bot = ScreenMemoryChatBot()
+    chat_bot.run()
 
 
 if __name__ == "__main__":

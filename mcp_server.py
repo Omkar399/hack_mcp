@@ -456,9 +456,9 @@ def main():
     # Initialize and run the server
     asyncio.run(initialize_server())
     
-    # Run the EnrichMCP server
-    logger.info("Starting EnrichMCP server with HTTP transport...")
-    app.run(transport="streamable-http")
+    # Run the EnrichMCP server with stdio transport (standard for local MCP)
+    logger.info("Starting EnrichMCP server with stdio transport...")
+    app.run()
 
 
 if __name__ == "__main__":
