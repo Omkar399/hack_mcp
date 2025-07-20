@@ -86,6 +86,53 @@ tmp/
 *.safetensors
 
 # API keys and secrets
-.env.local
+.env*
+!.env.example
 secrets.json
 config.local.yaml
+*_config.yaml
+*_config.json
+
+# Additional security
+*.key
+*.pem
+*.p12
+*.pfx
+auth.json
+credentials.json
+api_keys.txt
+secrets/
+
+# User data and privacy
+data/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+
+# Model cache and downloads (but NOT eidolon/models/ which is source code)
+.cache/
+huggingface/
+transformers_cache/
+torch/
+.torch/
+model_downloads/
+downloaded_models/
+huggingface_cache/
+
+# ChromaDB
+vector_db/
+chroma.sqlite3
+chroma/
+
+# Process and runtime files
+*.pid
+pids/
