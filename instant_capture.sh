@@ -1,24 +1,33 @@
 #!/bin/bash
 
-# Ultra-Simple Instant Capture for Chrome/Browser compatibility
-# Minimal script that always works
+# Screen Memory Assistant - Fixed Instant Capture
+# Properly captures the foreground application
 
+set -e
+
+# Setup PATH for Homebrew and uv
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-cd "$(dirname "$0")"
 
-# No notification - silent capture (you know it works when you press the key)
-# osascript -e 'beep 1' &
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# Load environment
-[ -f .env ] && export $(cat .env | grep -v '^#' | xargs)
-
-# Quick server check and start if needed
-if ! curl -s http://localhost:5003/health >/dev/null 2>&1; then
-    uv run uvicorn screen_api:app --host 0.0.0.0 --port 5003 >/dev/null 2>&1 &
-    sleep 2
+# Load environment variables if .env exists
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
 fi
 
-# Capture in background (silent to avoid duplicate notifications)
-uv run python simple_capture.py --vision --silent >/dev/null 2>&1 &
+echo "📸 Capturing foreground app..."
 
-exit 0 
+# Give a tiny delay to ensure proper window detection
+sleep 0.1
+
+# Use the proper foreground capture system
+source .venv/bin/activate && python capture_foreground.py
+
+# Show success notification
+osascript -e 'display notification "Screenshot captured and processed" with title "📸 Screen Memory" sound name "Glass"'
+
+echo "✅ Capture complete!" 

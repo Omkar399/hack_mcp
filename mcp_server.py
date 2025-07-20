@@ -445,20 +445,12 @@ async def initialize_server():
 
 def main():
     """Main entry point for the MCP server."""
-    # Set context for OpenRouter API if available
-    if os.getenv("OPENROUTER_API_KEY"):
-        app.set_context({
-            "openrouter_api_key": os.getenv("OPENROUTER_API_KEY"),
-            "openrouter_base_url": "https://openrouter.ai/api/v1"
-        })
-        logger.info("OpenRouter API key configured for server-side LLM sampling")
-    
     # Initialize and run the server
     asyncio.run(initialize_server())
     
     # Run the EnrichMCP server with stdio transport (standard for local MCP)
     logger.info("Starting EnrichMCP server with stdio transport...")
-    app.run()
+    app.run(transport="stdio")
 
 
 if __name__ == "__main__":
