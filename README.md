@@ -1,348 +1,304 @@
-# 🖥️ Screen Memory Assistant
+# Screen Memory Assistant
 
-> **Local screen capture and memory with ML-powered search**
+A sophisticated screen capture and memory system that automatically captures, analyzes, and stores screen content with OCR, visual analysis, and semantic search capabilities. Built with FastAPI, PostgreSQL, and modern AI models.
 
-A privacy-preserving, fully local screen memory system that captures, processes, and searches everything you see on your screen using OCR, CLIP embeddings, and LLM fallbacks.
+## 🎯 Project Overview
 
-## 🌟 Features
-
-- **📸 Continuous Screen Capture**: Automatic screenshot capture every 2 seconds
-- **🔍 OCR Text Extraction**: Multiple OCR engines (Tesseract, EasyOCR) with fallbacks
-- **🧠 Semantic Search**: CLIP-powered visual similarity search
-- **🤖 Vision API Fallback**: GPT-4o Vision via Martian router for complex scenes
-- **🗄️ Full-Text Search**: PostgreSQL with vector similarity (pgvector)
-- **⚡ Real-time API**: FastAPI server with MCP-compatible endpoints
-- **🖱️ CLI Interface**: Beautiful CLI tool with Rich output
-- **⚡ Fast Setup**: uv-powered dependency management (10x faster than pip)
-- **🐳 Containerized**: One-command Docker setup
-- **🔒 Privacy-First**: Everything runs locally, no cloud data storage
+This system automatically captures screenshots, extracts text via OCR, analyzes visual content using CLIP embeddings, and stores everything in a PostgreSQL database with vector similarity search. It's designed to create a comprehensive memory of your digital activities for future context-aware interactions.
 
 ## 🏗️ Architecture
 
-```mermaid
-flowchart TD
-    A[PyAutoGUI Screenshot] --> B[Multi-OCR Pipeline]
-    B --> C[CLIP Embeddings]
-    C --> D[PostgreSQL + pgvector]
-    D --> E[FastAPI Server]
-    E --> F[CLI Tool]
-    
-    B --> G[GPT-4o Vision Fallback]
-    G --> D
-    
-    H[Martian Router] --> G
-```
+### Core Components
 
-## 🚀 Quick Start
+- **Screen Capture**: `pyautogui` for screenshot capture with window information
+- **Text Extraction**: EasyOCR for primary OCR, GPT-4o Vision via OpenRouter as fallback
+- **Visual Analysis**: CLIP embeddings for semantic image understanding
+- **Database**: PostgreSQL with `pgvector` extension for vector similarity search
+- **API Server**: FastAPI with async processing and MCP-compatible endpoints
+- **CLI Interface**: Command-line tool for database interactions
+- **macOS Integration**: Keyboard shortcuts, notifications, and native UI integration
+
+### Data Flow
+
+1. **Capture Trigger**: Keyboard shortcut or API call initiates capture
+2. **Screen Analysis**: OCR extracts text, CLIP generates visual embeddings
+3. **Context Enrichment**: Window titles, timestamps, and metadata added
+4. **Storage**: Data saved to PostgreSQL with vector embeddings
+5. **Search**: Semantic similarity search across text and visual content
+
+## 🚀 Current Features
+
+### ✅ Implemented
+
+- **Automatic Screen Capture**: Trigger via keyboard shortcuts or API
+- **Multi-Modal Analysis**: OCR + visual embeddings for comprehensive understanding
+- **Async Processing**: Non-blocking capture with background task processing
+- **macOS Integration**: Native notifications, keyboard shortcuts, accessibility support
+- **Vector Database**: PostgreSQL with semantic search capabilities
+- **API Server**: RESTful endpoints for capture and search operations
+- **CLI Tool**: Command-line interface for database queries
+- **Environment Management**: Secure API key handling with `python-dotenv`
+- **Docker Support**: Containerized PostgreSQL with pgvector
+
+### 🎯 Key Capabilities
+
+- **Instant Capture**: Sub-second screenshot capture with immediate feedback
+- **Smart Fallbacks**: OCR → Vision API fallback for better text extraction
+- **Context Preservation**: Window titles, timestamps, and application context
+- **Semantic Search**: Find relevant screenshots by text or visual similarity
+- **Concurrent Processing**: Multiple captures can be processed simultaneously
+- **macOS Native**: Toast notifications, keyboard shortcuts, accessibility permissions
+
+## 📋 Setup Instructions
 
 ### Prerequisites
 
-- Docker & Docker Compose
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) - Fast Python package installer
-- macOS or Linux (Windows support TBD)
+- macOS (for native integration features)
+- Python 3.8+
+- Docker and Docker Compose
+- OpenRouter API key
 
-#### Install uv (if not already installed)
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+### Installation
 
-### 1. Launch the System
+1. **Clone and Setup**:
+   ```bash
+   git clone <repository-url>
+   cd hack_mcp
+   ```
 
-```bash
-# Clone and setup (if not already done)
-git clone <repository>
-cd screen-memory-assistant
+2. **Environment Configuration**:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your OpenRouter API key
+   ```
 
-# Start everything with one command
-./start.sh
+3. **Install Dependencies**:
+   ```bash
+   uv sync
+   ```
 
-# Or with health check
-./start.sh --test
-```
+4. **Start Database**:
+   ```bash
+   docker-compose up -d
+   ```
 
-### 2. Basic Usage
+5. **Initialize Database**:
+   ```bash
+   python -c "from database import init_db; import asyncio; asyncio.run(init_db())"
+   ```
 
-```bash
-# Check system health
-uv run python cli.py health
-# Or use the installed script: uv run screen-memory health
+### macOS Shortcut Setup
 
-# Take a screenshot now
-uv run python cli.py capture
+1. **Create Shortcut**:
+   - Open macOS Shortcuts app
+   - Create new shortcut
+   - Add "Run Shell Script" action
+   - Set script to: `/bin/zsh /path/to/hack_mcp/capture_shortcut.sh`
+   - Save as "Screen Capture"
 
-# Search your screen history
-uv run python cli.py search "docker command"
+2. **Set Keyboard Shortcut**:
+   - System Preferences → Keyboard → Shortcuts
+   - Add shortcut for your Shortcuts app shortcut
+   - Recommended: `Cmd+Shift+S`
 
-# Show recent events
-uv run python cli.py recent --hours 24
+3. **Accessibility Permissions**:
+   - System Preferences → Security & Privacy → Privacy → Accessibility
+   - Add Terminal and Shortcuts app
 
-# Semantic search (requires CLIP)
-uv run python cli.py semantic "terminal window"
+## 🛠️ Usage
 
-# Get recent errors
-uv run python cli.py errors --minutes 30
-```
-
-### 3. Advanced Usage
-
-```bash
-# Search specific app
-uv run python cli.py search "error" --app "Chrome"
-
-# Search recent timeframe
-uv run python cli.py search "password" --since 60  # last 60 minutes
-
-# Get system statistics
-uv run python cli.py stats
-
-# Find last Docker command
-uv run python cli.py docker
-```
-
-## 📋 API Endpoints (MCP-Compatible)
-
-The system exposes FastAPI endpoints compatible with Model Context Protocol:
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/capture_now` | POST | Take immediate screenshot |
-| `/find` | POST | Full-text search |
-| `/search_semantic` | POST | Vector similarity search |
-| `/recent_errors` | GET | Find recent error dialogs |
-| `/last_docker` | GET | Get last Docker command |
-| `/calendar_between` | GET | Calendar entries in timeframe |
-| `/health` | GET | System health check |
-
-### Example API Usage
-
-```python
-import httpx
-
-async with httpx.AsyncClient() as client:
-    # Capture screenshot
-    response = await client.post("http://localhost:5003/capture_now")
-    
-    # Search events
-    response = await client.post("http://localhost:5003/find", json={
-        "query": "docker run",
-        "limit": 10
-    })
-```
-
-## 🧪 Testing
-
-Run the comprehensive integration test suite:
+### Starting the System
 
 ```bash
-uv run python test_integration.py
+# Start API server and hotkey daemon
+./start_with_hotkeys.sh
+
+# Or start components individually
+python screen_api.py  # API server
+python hotkey_daemon.py  # Hotkey listener
 ```
 
-This tests:
-- ✅ Database connectivity
-- ✅ Screen capture pipeline
-- ✅ OCR engines
-- ✅ CLIP embeddings
-- ✅ API endpoints
-- ✅ Search functionality
-- ✅ Performance benchmarks
+### Capture Methods
+
+1. **Keyboard Shortcut**: Press your configured shortcut (e.g., `Cmd+Shift+S`)
+2. **API Call**: `curl -X POST http://localhost:8000/capture`
+3. **CLI Tool**: `python cli.py capture`
+
+### Search and Query
+
+```bash
+# Search by text
+python cli.py search "find screenshots with login forms"
+
+# Search by similarity
+python cli.py similar <screenshot_id>
+
+# List recent captures
+python cli.py list --limit 10
+```
+
+### API Endpoints
+
+- `POST /capture` - Trigger screen capture
+- `GET /captures` - List recent captures
+- `GET /captures/{id}` - Get specific capture details
+- `GET /search` - Semantic search across captures
+- `GET /status` - Capture processing status
+
+## 📁 Project Structure
+
+```
+hack_mcp/
+├── capture.py              # Core capture logic with OCR and CLIP
+├── screen_api.py           # FastAPI server with async processing
+├── database.py             # SQLAlchemy async database operations
+├── cli.py                  # Command-line interface
+├── hotkey_daemon.py        # Keyboard shortcut listener
+├── simple_capture.py       # Standalone capture script
+├── capture_shortcut.sh     # macOS Shortcuts integration
+├── instant_capture.sh      # Fast capture script
+├── reliable_capture.sh     # Reliable capture script
+├── start_with_hotkeys.sh   # System startup script
+├── docker-compose.yml      # PostgreSQL container setup
+├── pyproject.toml          # Python dependencies
+└── README.md              # This file
+```
 
 ## 🔧 Configuration
 
 ### Environment Variables
 
 ```bash
-# Database connection
-DATABASE_URL=postgresql+asyncpg://hack:hack123@localhost:5432/screenmemory
+# Required
+OPENROUTER_API_KEY=your_api_key_here
 
-# Martian router for vision API
-MARTIAN_URL=http://localhost:5333
-OPENAI_API_BASE=http://localhost:5333/v1
-OPENAI_API_KEY=localrouter
-
-# CLI API endpoint
-SCREEN_MEMORY_API=http://localhost:5003
+# Optional
+DATABASE_URL=postgresql://user:pass@localhost/screen_memory
+LOG_LEVEL=INFO
 ```
 
-### Docker Services
+### Database Schema
 
-- **PostgreSQL**: Database with pgvector extension
-- **Martian Router**: LLM routing for vision fallback
-- **App Container**: Main Python application
+- `screen_events`: Main capture data with text, embeddings, metadata
+- `capture_status`: Processing status tracking
+- Vector similarity search via pgvector extension
 
-## 📊 Performance
+## 🎯 Next Steps: EnrichMCP Integration & Popup Chat Bot
 
-Typical performance on modern MacBook:
+### Phase 1: EnrichMCP Integration
 
-- **Screenshot + OCR**: ~150ms
-- **CLIP Embedding**: ~25ms (with Metal)
-- **Database Insert**: ~5ms
-- **Text Search**: <10ms
-- **Vector Search**: ~50ms
+**Goal**: Implement standardized MCP (Model Context Protocol) compatibility for better AI model integration and context management.
 
-Memory usage: ~500MB base + ~200MB per CLIP model
+**Implementation Plan**:
+1. **MCP Server Setup**:
+   - Create MCP-compatible server endpoints
+   - Implement standard MCP resource and tool protocols
+   - Add context retrieval and search capabilities
 
-## 🛠️ Development
+2. **Enhanced Context Management**:
+   - Structured context formatting for AI models
+   - Temporal context windows (recent vs. historical)
+   - Multi-modal context aggregation (text + visual)
 
-### Manual Setup (without Docker)
+3. **Standardized API**:
+   - MCP-compatible resource endpoints
+   - Tool definitions for capture, search, and analysis
+   - Context streaming for real-time updates
 
-```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+### Phase 2: Popup Chat Bot
 
-# Install dependencies with uv (much faster than pip!)
-uv sync
+**Goal**: Create an intelligent chat interface that can answer questions about captured screen content using both text and visual context.
 
-# Optional: Install with ML support (CLIP embeddings)
-uv sync --extra ml
+**Implementation Plan**:
+1. **Chat Interface**:
+   - Native macOS popup window
+   - Real-time chat with typing indicators
+   - Keyboard shortcut activation (`Cmd+Shift+C`)
 
-# Optional: Install with better OCR support
-uv sync --extra ocr
+2. **Context-Aware Responses**:
+   - Query understanding and intent classification
+   - Multi-modal context retrieval (text + visual similarity)
+   - Temporal relevance scoring
 
-# Or install everything for development
-uv sync --extra dev --extra ml --extra ocr
+3. **AI Integration**:
+   - OpenRouter integration for chat responses
+   - Context-aware prompt engineering
+   - Response generation with source attribution
 
-# Start PostgreSQL with pgvector
-brew install postgresql@16 pgvector
-brew services start postgresql@16
-createdb screenmemory
+4. **Advanced Features**:
+   - Follow-up question handling
+   - Context memory across conversation
+   - Action suggestions based on screen content
 
-# Initialize database
-uv run python -c "
-import asyncio
-from database import db
-asyncio.run(db.initialize())
-"
-
-# Start Martian router
-docker run -p 5333:5333 ghcr.io/withmartian/router:latest
-
-# Start API server
-uv run uvicorn screen_api:app --reload --port 5003
-
-# Test capture
-uv run python -c "
-import asyncio
-from capture import ScreenCapture
-capture = ScreenCapture()
-print(asyncio.run(capture.capture_screen(save_image=False)))
-"
-```
-
-### Project Structure
+### Technical Architecture for Chat Bot
 
 ```
-screen-memory-assistant/
-├── pyproject.toml         # uv project configuration & dependencies
-├── uv.lock                # Locked dependency versions
-├── .python-version        # Python version specification
-├── docker-compose.yml      # Full stack orchestration
-├── Dockerfile             # Python app container
-├── database/
-│   └── init.sql           # Database schema
-├── models.py              # SQLAlchemy models
-├── capture.py             # Screen capture + ML pipeline
-├── database.py            # Database operations
-├── screen_api.py          # FastAPI server
-├── cli.py                 # Command-line interface
-├── test_integration.py    # Integration tests
-├── quick_test.py          # Quick verification tests
-├── start.sh               # Startup script
-└── README.md              # This file
+User Query → Intent Classification → Context Retrieval → Response Generation
+     ↓              ↓                    ↓                    ↓
+Chat Interface → Query Parser → Multi-Modal Search → AI Model + Context
 ```
 
-## 🚨 Troubleshooting
+### Implementation Details
+
+1. **Chat Bot Components**:
+   - `chat_bot.py`: Core chat logic and AI integration
+   - `chat_ui.py`: Native macOS popup interface
+   - `context_engine.py`: Multi-modal context retrieval
+   - `intent_classifier.py`: Query understanding and routing
+
+2. **MCP Integration**:
+   - `mcp_server.py`: MCP-compatible server implementation
+   - `mcp_resources.py`: Resource definitions and handlers
+   - `mcp_tools.py`: Tool implementations for capture and search
+
+3. **Enhanced Database**:
+   - Conversation history storage
+   - Context relevance scoring
+   - Query-answer pairs for learning
+
+### Expected User Experience
+
+1. **Capture**: `Cmd+Shift+S` captures current screen
+2. **Chat**: `Cmd+Shift+C` opens popup chat bot
+3. **Query**: "What was I working on 10 minutes ago?"
+4. **Response**: AI provides context-aware answer with relevant screenshots
+5. **Follow-up**: "Show me the login form I was filling out"
+6. **Action**: System retrieves and displays relevant capture
+
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-**OCR not working**
+1. **Permission Denied**: Ensure Terminal and Shortcuts have accessibility permissions
+2. **Database Connection**: Check Docker is running and database is initialized
+3. **API Key**: Verify OpenRouter API key is set in `.env`
+4. **Hotkey Not Working**: Check macOS Shortcuts setup and keyboard shortcut assignment
+
+### Debug Mode
+
 ```bash
-# Check OCR engines
-uv run python -c "from capture import ScreenCapture; print(ScreenCapture().health_check())"
+# Enable verbose logging
+export LOG_LEVEL=DEBUG
+python screen_api.py
 
-# Install missing engines (they should already be in pyproject.toml)
-uv sync
+# Check capture status
+curl http://localhost:8000/status
 ```
-
-**Database connection failed**
-```bash
-# Check PostgreSQL status
-docker-compose logs postgres
-
-# Restart database
-docker-compose restart postgres
-```
-
-**CLIP embeddings unavailable**
-```bash
-# Check PyTorch installation
-uv run python -c "import torch; print(torch.__version__)"
-
-# Reinstall CLIP (already in pyproject.toml)
-uv sync --reinstall
-```
-
-**Vision API not working**
-```bash
-# Check Martian router
-curl http://localhost:5333/health
-
-# Restart router
-docker-compose restart martian
-```
-
-### Performance Issues
-
-**Slow captures**
-- Reduce screenshot frequency
-- Disable CLIP embeddings for speed
-- Use smaller CLIP model (ViT-B/16)
-
-**High memory usage**
-- Reduce CLIP batch size
-- Clean up old events regularly
-- Use CPU-only PyTorch
-
-## 🔒 Privacy & Security
-
-- **Local-only**: No data leaves your machine
-- **Encryption**: Optional AES encryption for database
-- **Access control**: No network exposure by default
-- **Data retention**: Automatic cleanup after 30 days
-- **Audit**: Full logging of all operations
-
-## 📈 Future Enhancements
-
-- [ ] **Whisper integration** for voice queries
-- [ ] **Timeline web UI** with React frontend
-- [ ] **Mobile companion** app for remote search
-- [ ] **Plugin system** for custom parsers
-- [ ] **Federated sync** between devices
-- [ ] **Advanced analytics** and insights
 
 ## 🤝 Contributing
 
-This is a hackathon project (48-hour build). Contributions welcome!
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
+This project is actively developed. Key areas for contribution:
+- EnrichMCP integration
+- Chat bot implementation
+- UI/UX improvements
+- Performance optimization
+- Additional AI model integrations
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
-## 🙏 Acknowledgments
-
-- **OpenAI CLIP** for semantic understanding
-- **Tesseract OCR** for text extraction
-- **pgvector** for similarity search
-- **Martian** for LLM routing
-- **FastAPI** for the API framework
-- **Rich** for beautiful CLI output
+[Add your license information here]
 
 ---
 
-**Built with ❤️ in 48 hours for maximum productivity and zero privacy compromise.** 
+**Current Status**: ✅ Core system operational with capture, storage, and search capabilities
+**Next Milestone**: 🚧 EnrichMCP integration and popup chat bot implementation 
