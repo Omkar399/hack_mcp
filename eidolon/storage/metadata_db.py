@@ -151,6 +151,223 @@ class MetadataDatabase:
             """)
             
             conn.commit()
+            
+            # Run schema migrations for enhanced features
+            self._run_schema_migrations(conn)
+    
+    def _run_schema_migrations(self, conn):
+        """Run database schema migrations for enhanced features."""
+        cursor = conn.cursor()
+        
+        # Check current schema version
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                description TEXT
+            )
+        """)
+        
+        # Get current version
+        cursor.execute("SELECT MAX(version) FROM schema_version")
+        result = cursor.fetchone()
+        current_version = result[0] if result[0] is not None else 0
+        
+        migrations = [
+            (1, "Add enhanced OCR fields", self._migrate_v1_enhanced_ocr),
+            (2, "Add enhanced content analysis fields", self._migrate_v2_enhanced_analysis),
+            (3, "Add domain-specific content tables", self._migrate_v3_domain_content),
+        ]
+        
+        for version, description, migration_func in migrations:
+            if version > current_version:
+                self.logger.info(f"Running migration v{version}: {description}")
+                try:
+                    migration_func(cursor)
+                    cursor.execute(
+                        "INSERT INTO schema_version (version, description) VALUES (?, ?)",
+                        (version, description)
+                    )
+                    conn.commit()
+                    self.logger.info(f"Migration v{version} completed successfully")
+                except Exception as e:
+                    self.logger.error(f"Migration v{version} failed: {e}")
+                    conn.rollback()
+                    raise
+    
+    def _migrate_v1_enhanced_ocr(self, cursor):
+        """Migration v1: Add enhanced OCR fields."""
+        # Add new fields to ocr_results table
+        new_fields = [
+            ("urls", "TEXT"),  # JSON array of extracted URLs
+            ("titles", "TEXT"),  # JSON array of extracted titles
+            ("structured_content", "TEXT"),  # JSON object with content patterns
+        ]
+        
+        # Check if fields already exist
+        cursor.execute("PRAGMA table_info(ocr_results)")
+        existing_fields = {row[1] for row in cursor.fetchall()}
+        
+        for field_name, field_type in new_fields:
+            if field_name not in existing_fields:
+                cursor.execute(f"ALTER TABLE ocr_results ADD COLUMN {field_name} {field_type}")
+                self.logger.debug(f"Added field {field_name} to ocr_results table")
+    
+    def _migrate_v2_enhanced_analysis(self, cursor):
+        """Migration v2: Add enhanced content analysis fields."""
+        # Add new fields to content_analysis table
+        new_fields = [
+            ("domain_info", "TEXT"),  # JSON object with domain detection info
+            ("video_info", "TEXT"),   # JSON object with video-specific info
+            ("page_info", "TEXT"),    # JSON object with webpage info
+            ("enhanced_metadata", "TEXT"),  # JSON object with enhanced metadata
+        ]
+        
+        # Check if fields already exist
+        cursor.execute("PRAGMA table_info(content_analysis)")
+        existing_fields = {row[1] for row in cursor.fetchall()}
+        
+        for field_name, field_type in new_fields:
+            if field_name not in existing_fields:
+                cursor.execute(f"ALTER TABLE content_analysis ADD COLUMN {field_name} {field_type}")
+                self.logger.debug(f"Added field {field_name} to content_analysis table")
+    
+    def _migrate_v3_domain_content(self, cursor):
+        """Migration v3: Add domain-specific content tables and enhanced activity timeline."""
+        # Create video content table for detailed video information
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS video_content (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                screenshot_id INTEGER NOT NULL,
+                platform TEXT NOT NULL,  -- youtube, netflix, etc.
+                video_title TEXT,
+                channel_name TEXT,
+                duration TEXT,
+                view_count TEXT,
+                upload_date TEXT,
+                current_time TEXT,
+                season TEXT,
+                episode TEXT,
+                genre TEXT,
+                rating TEXT,
+                description_snippet TEXT,
+                metadata TEXT,  -- JSON for additional platform-specific data
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (screenshot_id) REFERENCES screenshots (id)
+            )
+        """)
+        
+        # Create webpage content table for detailed webpage information
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS webpage_content (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                screenshot_id INTEGER NOT NULL,
+                url TEXT,
+                title TEXT,
+                domain TEXT,
+                search_query TEXT,
+                page_type TEXT,  -- browser, search_engine, social_media, etc.
+                metadata TEXT,  -- JSON for additional webpage data
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (screenshot_id) REFERENCES screenshots (id)
+            )
+        """)
+        
+        # Create indexes for the new tables
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_screenshot_id ON video_content (screenshot_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_platform ON video_content (platform)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_video_title ON video_content (video_title)")
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_webpage_screenshot_id ON webpage_content (screenshot_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_webpage_domain ON webpage_content (domain)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_webpage_url ON webpage_content (url)")
+        
+        # Create full-text search for video titles and webpage content
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS video_search USING fts5(
+                video_title,
+                channel_name,
+                description_snippet,
+                content='video_content',
+                content_rowid='id'
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS webpage_search USING fts5(
+                title,
+                url,
+                domain,
+                search_query,
+                content='webpage_content', 
+                content_rowid='id'
+            )
+        """)
+        
+        # Create triggers for FTS maintenance
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS video_content_ai AFTER INSERT ON video_content BEGIN
+                INSERT INTO video_search(rowid, video_title, channel_name, description_snippet) 
+                VALUES (NEW.id, NEW.video_title, NEW.channel_name, NEW.description_snippet);
+            END
+        """)
+        
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS webpage_content_ai AFTER INSERT ON webpage_content BEGIN
+                INSERT INTO webpage_search(rowid, title, url, domain, search_query) 
+                VALUES (NEW.id, NEW.title, NEW.url, NEW.domain, NEW.search_query);
+            END
+        """)
+        
+        # Enhanced activity timeline table for temporal queries
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS activity_timeline (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                screenshot_id INTEGER NOT NULL,
+                activity_type TEXT NOT NULL,  -- video_view, webpage_visit, document_open, etc.
+                domain TEXT,  -- youtube.com, netflix.com, etc.
+                platform TEXT,  -- youtube, netflix, browser, etc.
+                title TEXT,  -- video title, page title, etc.
+                url TEXT,  -- full URL if applicable
+                duration_seconds INTEGER,  -- how long activity was active
+                session_start DATETIME NOT NULL,
+                session_end DATETIME,
+                metadata TEXT,  -- JSON with activity-specific data
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (screenshot_id) REFERENCES screenshots (id)
+            )
+        """)
+        
+        # Create indexes for temporal queries
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_session_start ON activity_timeline (session_start)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_domain ON activity_timeline (domain)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_platform ON activity_timeline (platform)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_activity_type ON activity_timeline (activity_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_title ON activity_timeline (title)")
+        
+        # Create compound indexes for common temporal queries
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_platform_time ON activity_timeline (platform, session_start)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_domain_time ON activity_timeline (domain, session_start)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_type_time ON activity_timeline (activity_type, session_start)")
+        
+        # FTS for activity timeline content
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS activity_search USING fts5(
+                title,
+                url,
+                metadata,
+                content='activity_timeline',
+                content_rowid='id'
+            )
+        """)
+        
+        # Trigger for FTS maintenance
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS activity_timeline_ai AFTER INSERT ON activity_timeline BEGIN
+                INSERT INTO activity_search(rowid, title, url, metadata) 
+                VALUES (NEW.id, NEW.title, NEW.url, NEW.metadata);
+            END
+        """)
     
     @log_performance
     def store_screenshot(self, file_path: str = None, timestamp: datetime = None, hash: str = None, 
@@ -263,7 +480,10 @@ class MetadataDatabase:
                 'language': getattr(ocr_result, 'language', None),
                 'method': getattr(ocr_result, 'method', None),
                 'word_count': getattr(ocr_result, 'word_count', 0),
-                'regions': getattr(ocr_result, 'regions', [])
+                'regions': getattr(ocr_result, 'regions', []),
+                'urls': getattr(ocr_result, 'urls', []),
+                'titles': getattr(ocr_result, 'titles', []),
+                'structured_content': getattr(ocr_result, 'structured_content', {})
             }
         else:
             # Dictionary
@@ -274,8 +494,8 @@ class MetadataDatabase:
             
             cursor.execute("""
                 INSERT INTO ocr_results 
-                (screenshot_id, text, confidence, language, method, word_count, regions)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (screenshot_id, text, confidence, language, method, word_count, regions, urls, titles, structured_content)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 screenshot_id,
                 ocr_data['text'],
@@ -283,7 +503,10 @@ class MetadataDatabase:
                 ocr_data.get('language'),
                 ocr_data.get('method'),
                 ocr_data.get('word_count', 0),
-                json.dumps(ocr_data.get('regions', []))
+                json.dumps(ocr_data.get('regions', [])),
+                json.dumps(ocr_data.get('urls', [])),
+                json.dumps(ocr_data.get('titles', [])),
+                json.dumps(ocr_data.get('structured_content', {}))
             ))
             
             ocr_id = cursor.lastrowid
@@ -315,7 +538,11 @@ class MetadataDatabase:
                 'confidence': getattr(analysis_result, 'confidence', 0.0),
                 'tags': getattr(analysis_result, 'tags', []),
                 'ui_elements': getattr(analysis_result, 'ui_elements', []),
-                'metadata': getattr(analysis_result, 'metadata', {})
+                'metadata': getattr(analysis_result, 'metadata', {}),
+                'domain_info': getattr(analysis_result, 'domain_info', {}),
+                'video_info': getattr(analysis_result, 'video_info', {}),
+                'page_info': getattr(analysis_result, 'page_info', {}),
+                'enhanced_metadata': getattr(analysis_result, 'enhanced_metadata', {})
             }
         else:
             # Dictionary
@@ -326,8 +553,9 @@ class MetadataDatabase:
             
             cursor.execute("""
                 INSERT INTO content_analysis 
-                (screenshot_id, content_type, description, confidence, tags, ui_elements, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (screenshot_id, content_type, description, confidence, tags, ui_elements, metadata, 
+                 domain_info, video_info, page_info, enhanced_metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 screenshot_id,
                 analysis_data['content_type'],
@@ -335,7 +563,11 @@ class MetadataDatabase:
                 analysis_data['confidence'],
                 json.dumps(analysis_data.get('tags', [])),
                 json.dumps(analysis_data.get('ui_elements', [])),
-                json.dumps(analysis_data.get('metadata', {}))
+                json.dumps(analysis_data.get('metadata', {})),
+                json.dumps(analysis_data.get('domain_info', {})),
+                json.dumps(analysis_data.get('video_info', {})),
+                json.dumps(analysis_data.get('page_info', {})),
+                json.dumps(analysis_data.get('enhanced_metadata', {}))
             ))
             
             analysis_id = cursor.lastrowid
@@ -655,6 +887,429 @@ class MetadataDatabase:
     def cleanup_old_screenshots(self, days_to_keep: int) -> int:
         """Clean up old screenshots (alias for cleanup_old_data)."""
         return self.cleanup_old_data(days_to_keep)
+    
+    @log_performance
+    def store_video_content(self, screenshot_id: int, video_data: Dict[str, Any]) -> int:
+        """
+        Store video content information.
+        
+        Args:
+            screenshot_id: ID of the associated screenshot.
+            video_data: Dictionary containing video information.
+            
+        Returns:
+            int: Video content ID.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO video_content 
+                (screenshot_id, platform, video_title, channel_name, duration, view_count, 
+                 upload_date, current_time, season, episode, genre, rating, description_snippet, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                screenshot_id,
+                video_data.get('platform', 'unknown'),
+                video_data.get('video_title') or video_data.get('title', ''),
+                video_data.get('channel_name', ''),
+                video_data.get('duration', ''),
+                video_data.get('view_count', ''),
+                video_data.get('upload_date', ''),
+                video_data.get('current_time', ''),
+                video_data.get('season', ''),
+                video_data.get('episode', ''),
+                video_data.get('genre', ''),
+                video_data.get('rating', ''),
+                video_data.get('description_snippet', ''),
+                json.dumps({k: v for k, v in video_data.items() if k not in [
+                    'platform', 'video_title', 'title', 'channel_name', 'duration', 
+                    'view_count', 'upload_date', 'current_time', 'season', 'episode', 
+                    'genre', 'rating', 'description_snippet'
+                ]})
+            ))
+            
+            video_id = cursor.lastrowid
+            conn.commit()
+            
+            return video_id
+    
+    @log_performance
+    def store_webpage_content(self, screenshot_id: int, webpage_data: Dict[str, Any]) -> int:
+        """
+        Store webpage content information.
+        
+        Args:
+            screenshot_id: ID of the associated screenshot.
+            webpage_data: Dictionary containing webpage information.
+            
+        Returns:
+            int: Webpage content ID.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO webpage_content 
+                (screenshot_id, url, title, domain, search_query, page_type, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                screenshot_id,
+                webpage_data.get('url', ''),
+                webpage_data.get('title', ''),
+                webpage_data.get('domain', ''),
+                webpage_data.get('search_query', ''),
+                webpage_data.get('type') or webpage_data.get('page_type', 'webpage'),
+                json.dumps({k: v for k, v in webpage_data.items() if k not in [
+                    'url', 'title', 'domain', 'search_query', 'type', 'page_type'
+                ]})
+            ))
+            
+            webpage_id = cursor.lastrowid
+            conn.commit()
+            
+            return webpage_id
+    
+    def get_video_content_by_screenshot(self, screenshot_id: int) -> Optional[Dict[str, Any]]:
+        """Get video content for a screenshot."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM video_content WHERE screenshot_id = ?", (screenshot_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                result = dict(row)
+                # Parse JSON metadata
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                return result
+            return None
+    
+    def get_webpage_content_by_screenshot(self, screenshot_id: int) -> Optional[Dict[str, Any]]:
+        """Get webpage content for a screenshot."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM webpage_content WHERE screenshot_id = ?", (screenshot_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                result = dict(row)
+                # Parse JSON metadata
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                return result
+            return None
+    
+    def search_video_content(self, query: str, platform: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """Search video content using FTS."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if platform:
+                cursor.execute("""
+                    SELECT v.*, s.timestamp, s.file_path 
+                    FROM video_search vs
+                    JOIN video_content v ON vs.rowid = v.id
+                    JOIN screenshots s ON v.screenshot_id = s.id
+                    WHERE video_search MATCH ? AND v.platform = ?
+                    ORDER BY rank LIMIT ?
+                """, (query, platform, limit))
+            else:
+                cursor.execute("""
+                    SELECT v.*, s.timestamp, s.file_path 
+                    FROM video_search vs
+                    JOIN video_content v ON vs.rowid = v.id
+                    JOIN screenshots s ON v.screenshot_id = s.id
+                    WHERE video_search MATCH ?
+                    ORDER BY rank LIMIT ?
+                """, (query, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                results.append(result)
+            
+            return results
+    
+    def search_webpage_content(self, query: str, domain: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """Search webpage content using FTS."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if domain:
+                cursor.execute("""
+                    SELECT w.*, s.timestamp, s.file_path 
+                    FROM webpage_search ws
+                    JOIN webpage_content w ON ws.rowid = w.id
+                    JOIN screenshots s ON w.screenshot_id = s.id
+                    WHERE webpage_search MATCH ? AND w.domain LIKE ?
+                    ORDER BY rank LIMIT ?
+                """, (query, f"%{domain}%", limit))
+            else:
+                cursor.execute("""
+                    SELECT w.*, s.timestamp, s.file_path 
+                    FROM webpage_search ws
+                    JOIN webpage_content w ON ws.rowid = w.id
+                    JOIN screenshots s ON w.screenshot_id = s.id
+                    WHERE webpage_search MATCH ?
+                    ORDER BY rank LIMIT ?
+                """, (query, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                results.append(result)
+            
+            return results
+    
+    @log_performance
+    def log_activity_timeline(self, screenshot_id: int, activity_data: Dict[str, Any]) -> int:
+        """
+        Log an activity to the timeline for temporal queries.
+        
+        Args:
+            screenshot_id: ID of the associated screenshot.
+            activity_data: Dictionary containing activity information.
+            
+        Returns:
+            int: Activity timeline ID.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Determine session_start from timestamp or use current time
+            session_start = activity_data.get('session_start') or activity_data.get('timestamp') or datetime.now().isoformat()
+            if isinstance(session_start, datetime):
+                session_start = session_start.isoformat()
+            
+            cursor.execute("""
+                INSERT INTO activity_timeline 
+                (screenshot_id, activity_type, domain, platform, title, url, 
+                 duration_seconds, session_start, session_end, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                screenshot_id,
+                activity_data.get('activity_type', 'unknown'),
+                activity_data.get('domain', ''),
+                activity_data.get('platform', ''),
+                activity_data.get('title', ''),
+                activity_data.get('url', ''),
+                activity_data.get('duration_seconds'),
+                session_start,
+                activity_data.get('session_end'),
+                json.dumps({k: v for k, v in activity_data.items() if k not in [
+                    'activity_type', 'domain', 'platform', 'title', 'url', 
+                    'duration_seconds', 'session_start', 'session_end', 'timestamp'
+                ]})
+            ))
+            
+            activity_id = cursor.lastrowid
+            conn.commit()
+            
+            return activity_id
+    
+    def get_last_activity_by_platform(self, platform: str, limit: int = 1) -> List[Dict[str, Any]]:
+        """
+        Get the most recent activity for a specific platform.
+        
+        Args:
+            platform: Platform name (youtube, netflix, etc.)
+            limit: Number of results to return
+            
+        Returns:
+            List of activity dictionaries
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path
+                FROM activity_timeline a
+                JOIN screenshots s ON a.screenshot_id = s.id
+                WHERE a.platform = ?
+                ORDER BY a.session_start DESC
+                LIMIT ?
+            """, (platform, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                results.append(result)
+            
+            return results
+    
+    def get_last_activity_by_domain(self, domain: str, limit: int = 1) -> List[Dict[str, Any]]:
+        """Get the most recent activity for a specific domain."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path
+                FROM activity_timeline a
+                JOIN screenshots s ON a.screenshot_id = s.id
+                WHERE a.domain LIKE ?
+                ORDER BY a.session_start DESC
+                LIMIT ?
+            """, (f"%{domain}%", limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                results.append(result)
+            
+            return results
+    
+    def get_activities_by_time_range(self, start_time: datetime, end_time: datetime, 
+                                   platform: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get activities within a specific time range."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            start_str = start_time.isoformat() if isinstance(start_time, datetime) else start_time
+            end_str = end_time.isoformat() if isinstance(end_time, datetime) else end_time
+            
+            if platform:
+                cursor.execute("""
+                    SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path
+                    FROM activity_timeline a
+                    JOIN screenshots s ON a.screenshot_id = s.id
+                    WHERE a.session_start BETWEEN ? AND ? AND a.platform = ?
+                    ORDER BY a.session_start DESC
+                    LIMIT ?
+                """, (start_str, end_str, platform, limit))
+            else:
+                cursor.execute("""
+                    SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path
+                    FROM activity_timeline a
+                    JOIN screenshots s ON a.screenshot_id = s.id
+                    WHERE a.session_start BETWEEN ? AND ?
+                    ORDER BY a.session_start DESC
+                    LIMIT ?
+                """, (start_str, end_str, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                results.append(result)
+            
+            return results
+    
+    def search_activity_timeline(self, query: str, platform: Optional[str] = None, 
+                                limit: int = 10) -> List[Dict[str, Any]]:
+        """Search activity timeline using FTS."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if platform:
+                cursor.execute("""
+                    SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path
+                    FROM activity_search ats
+                    JOIN activity_timeline a ON ats.rowid = a.id
+                    JOIN screenshots s ON a.screenshot_id = s.id
+                    WHERE activity_search MATCH ? AND a.platform = ?
+                    ORDER BY a.session_start DESC
+                    LIMIT ?
+                """, (query, platform, limit))
+            else:
+                cursor.execute("""
+                    SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path
+                    FROM activity_search ats
+                    JOIN activity_timeline a ON ats.rowid = a.id
+                    JOIN screenshots s ON a.screenshot_id = s.id
+                    WHERE activity_search MATCH ?
+                    ORDER BY a.session_start DESC
+                    LIMIT ?
+                """, (query, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                results.append(result)
+            
+            return results
+    
+    def get_recent_video_activities(self, platform: Optional[str] = None, hours: int = 24, 
+                                  limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent video viewing activities."""
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=hours)
+        
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if platform:
+                cursor.execute("""
+                    SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path,
+                           v.video_title, v.channel_name, v.duration, v.view_count
+                    FROM activity_timeline a
+                    JOIN screenshots s ON a.screenshot_id = s.id
+                    LEFT JOIN video_content v ON a.screenshot_id = v.screenshot_id
+                    WHERE a.activity_type = 'video_view' 
+                      AND a.session_start BETWEEN ? AND ?
+                      AND a.platform = ?
+                    ORDER BY a.session_start DESC
+                    LIMIT ?
+                """, (start_time.isoformat(), end_time.isoformat(), platform, limit))
+            else:
+                cursor.execute("""
+                    SELECT a.*, s.timestamp as screenshot_timestamp, s.file_path,
+                           v.video_title, v.channel_name, v.duration, v.view_count
+                    FROM activity_timeline a
+                    JOIN screenshots s ON a.screenshot_id = s.id
+                    LEFT JOIN video_content v ON a.screenshot_id = v.screenshot_id
+                    WHERE a.activity_type = 'video_view' 
+                      AND a.session_start BETWEEN ? AND ?
+                    ORDER BY a.session_start DESC
+                    LIMIT ?
+                """, (start_time.isoformat(), end_time.isoformat(), limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                result = dict(row)
+                if result.get('metadata'):
+                    try:
+                        result['metadata'] = json.loads(result['metadata'])
+                    except json.JSONDecodeError:
+                        result['metadata'] = {}
+                results.append(result)
+            
+            return results
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get database statistics."""

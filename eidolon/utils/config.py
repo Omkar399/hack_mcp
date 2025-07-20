@@ -87,6 +87,7 @@ class AnalysisConfig(BaseModel):
         "cost_limit_daily": 10.0,
         "local_first": True
     })
+    llm_enhanced_analysis: bool = Field(default=False)
     ocr: Dict[str, Union[str, list, float]] = Field(default_factory=lambda: {
         "engine": "tesseract",
         "languages": ["en"],

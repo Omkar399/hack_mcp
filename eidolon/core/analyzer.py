@@ -50,6 +50,13 @@ except ImportError:
 from ..utils.logging import get_component_logger, log_performance, log_exceptions
 from ..utils.config import get_config
 
+# Import cloud API for LLM-enhanced analysis
+try:
+    from ..models.cloud_api import CloudAPI
+    CLOUD_API_AVAILABLE = True
+except ImportError:
+    CLOUD_API_AVAILABLE = False
+
 
 class TextRegion:
     """Represents a region of text with coordinates."""
@@ -69,13 +76,19 @@ class ExtractedText:
         confidence: float,
         language: str = "en",
         regions: Optional[List[TextRegion]] = None,
-        method: str = "tesseract"
+        method: str = "tesseract",
+        urls: Optional[List[str]] = None,
+        titles: Optional[List[str]] = None,
+        structured_content: Optional[Dict[str, Any]] = None
     ):
         self.text = text
         self.confidence = confidence
         self.language = language
         self.regions = regions or []
         self.method = method
+        self.urls = urls or []
+        self.titles = titles or []
+        self.structured_content = structured_content or {}
         self.timestamp = datetime.now()
         self.word_count = len(self.text.split()) if self.text else 0
     
@@ -88,6 +101,9 @@ class ExtractedText:
             "method": self.method,
             "word_count": self.word_count,
             "timestamp": self.timestamp.isoformat(),
+            "urls": self.urls,
+            "titles": self.titles,
+            "structured_content": self.structured_content,
             "regions": [
                 {
                     "text": region.text,
@@ -216,7 +232,18 @@ class Analyzer:
         # Content classification patterns
         self._content_patterns = self._load_content_patterns()
         
-        self.logger.info(f"Analyzer initialized - Tesseract: {self._tesseract_available}, EasyOCR: pending, Florence-2: {self._florence_available}")
+        # Initialize cloud API for LLM-enhanced analysis
+        self._cloud_api = None
+        self._llm_enhanced = getattr(self.config.analysis, 'llm_enhanced_analysis', False)
+        if CLOUD_API_AVAILABLE and self._llm_enhanced:
+            try:
+                self._cloud_api = CloudAPI()
+                self.logger.info("LLM-enhanced analysis enabled")
+            except Exception as e:
+                self.logger.warning(f"Could not initialize CloudAPI: {e}")
+                self._llm_enhanced = False
+        
+        self.logger.info(f"Analyzer initialized - Tesseract: {self._tesseract_available}, EasyOCR: pending, Florence-2: {self._florence_available}, LLM: {self._llm_enhanced}")
     
     def _check_tesseract(self) -> bool:
         """Check if Tesseract is available."""
@@ -396,6 +423,210 @@ class Analyzer:
             ]
         }
     
+    def _extract_urls_from_text(self, text: str, regions: List[TextRegion]) -> List[str]:
+        """Extract URLs from OCR text with enhanced patterns."""
+        urls = set()
+        
+        # Enhanced URL patterns
+        url_patterns = [
+            # Complete URLs
+            r'https?://[^\s<>"{}|\\^`\[\]]+',
+            # URLs without protocol
+            r'www\.[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:/[^\s]*)?',
+            # Domain patterns
+            r'[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:/[^\s]*)?',
+            # IP addresses with ports
+            r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:/[^\s]*)?',
+            # Local URLs
+            r'localhost(?::\d+)?(?:/[^\s]*)?'
+        ]
+                
+        # Search in full text
+        for pattern in url_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                # Clean up the URL
+                url = match.strip('.,;:!?')
+                if self._is_valid_url(url):
+                    urls.add(url)
+        
+        # Search in individual regions for better accuracy
+        for region in regions:
+            region_text = region.text
+            for pattern in url_patterns:
+                matches = re.findall(pattern, region_text, re.IGNORECASE)
+                for match in matches:
+                    url = match.strip('.,;:!?')
+                    if self._is_valid_url(url):
+                        urls.add(url)
+        
+        return list(urls)
+    
+    def _is_valid_url(self, url: str) -> bool:
+        """Validate if a string is a valid URL."""
+        if len(url) < 4:
+            return False
+        
+        # Filter out common false positives
+        false_positives = [
+            'etc.', 'i.e.', 'e.g.', 'vs.', 'inc.', 'ltd.', 'corp.',
+            'co.uk', 'co.us', 'co.in'  # These might be valid but often false positives in OCR
+        ]
+        
+        url_lower = url.lower()
+        for fp in false_positives:
+            if url_lower == fp:
+                return False
+        
+        # Must contain at least one dot and valid characters
+        if '.' not in url:
+            return False
+        
+        # Check for valid domain structure
+
+        domain_pattern = r'^(?:https?://)?(?:www\.)?[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}'
+        if re.match(domain_pattern, url):
+            return True
+        
+        # Check for IP addresses
+        ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+        if re.match(ip_pattern, url):
+            return True
+        
+        return False
+    
+    def _extract_titles_from_text(self, text: str, regions: List[TextRegion]) -> List[str]:
+        """Extract potential titles from OCR text based on formatting and position."""
+        titles = []
+        
+        if not regions:
+            # Fallback to simple text extraction
+            lines = text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if self._is_potential_title(line):
+                    titles.append(line)
+            return titles[:3]  # Limit to top 3
+        
+        # Sort regions by position (top to bottom, left to right)
+        sorted_regions = sorted(regions, key=lambda r: (r.bbox[1], r.bbox[0]))
+        
+        # Group regions by vertical position (same line)
+        lines = []
+        current_line = []
+        current_y = -1
+        y_threshold = 10  # Pixels tolerance for same line
+        
+        for region in sorted_regions:
+            region_y = region.bbox[1]
+            
+            if current_y == -1 or abs(region_y - current_y) <= y_threshold:
+                current_line.append(region)
+                current_y = region_y
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = [region]
+                current_y = region_y
+        
+        if current_line:
+            lines.append(current_line)
+        
+        # Extract titles from lines
+        for line_regions in lines:
+            # Combine text from regions in the line
+            line_text = ' '.join(region.text for region in line_regions).strip()
+            
+            if self._is_potential_title(line_text):
+                # Check if this line has larger text (higher confidence or larger bbox)
+                avg_height = sum(region.bbox[3] - region.bbox[1] for region in line_regions) / len(line_regions)
+                avg_confidence = sum(region.confidence for region in line_regions) / len(line_regions)
+                
+                # Title criteria: good confidence and reasonable size
+                if avg_confidence > 0.7 and avg_height > 15:
+                    titles.append(line_text)
+        
+        # Sort titles by position (top first) and confidence
+        title_data = []
+        for title in titles:
+            # Find the regions for this title
+            for line_regions in lines:
+                line_text = ' '.join(region.text for region in line_regions).strip()
+                if line_text == title:
+                    avg_y = sum(region.bbox[1] for region in line_regions) / len(line_regions)
+                    avg_confidence = sum(region.confidence for region in line_regions) / len(line_regions)
+                    title_data.append((title, avg_y, avg_confidence))
+                    break
+        
+        # Sort by position (top first), then by confidence
+        title_data.sort(key=lambda x: (x[1], -x[2]))
+        
+        return [title for title, _, _ in title_data[:5]]  # Return top 5 titles
+    
+    def _is_potential_title(self, text: str) -> bool:
+        """Check if text could be a title."""
+        if not text or len(text.strip()) < 3:
+            return False
+        
+        text = text.strip()
+        
+        # Title characteristics
+        # - Not too long (titles are usually concise)
+        if len(text) > 200:
+            return False
+        
+        # - Contains meaningful words (not just numbers/symbols)
+
+        word_pattern = r'\b[a-zA-Z]{2,}\b'
+        words = re.findall(word_pattern, text)
+        if len(words) < 1:
+            return False
+        
+        # - Not just URLs or email addresses
+        if re.match(r'https?://', text) or '@' in text:
+            return False
+        
+        # - Not just file extensions or code
+        if re.match(r'^\.[a-z]{2,4}$', text) or text.startswith('def ') or text.startswith('class '):
+            return False
+        
+        # - Contains some capitalization (common in titles)
+        if text.isupper() and len(text) > 50:
+            return False  # All caps long text is usually not a title
+        
+        # - Not just punctuation or numbers
+        if re.match(r'^[^a-zA-Z]*$', text):
+            return False
+        
+        return True
+    
+    def _extract_structured_content(self, text: str, regions: List[TextRegion], urls: List[str]) -> Dict[str, Any]:
+        """Extract structured content from OCR text."""
+        structured = {
+            'line_count': len(text.split('\n')) if text else 0,
+            'url_count': len(urls),
+            'has_email': '@' in text,
+            'has_phone': bool(re.search(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', text)),
+            'has_date': bool(re.search(r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b', text)),
+            'has_time': bool(re.search(r'\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?\b', text)),
+            'language_detected': 'en',  # Could be enhanced with language detection
+            'text_density': len(text.split()) / max(len(regions), 1) if regions else 0
+        }
+        
+        # Detect content patterns
+
+        patterns = {
+            'has_code': bool(re.search(r'\b(def |class |import |function|var |let |const )', text)),
+            'has_command': bool(re.search(r'\$\s+\w+|C:\\>|\~\$', text)),
+            'has_error': bool(re.search(r'\b(error|exception|failed|traceback)\b', text, re.IGNORECASE)),
+            'has_social': bool(re.search(r'\b(like|share|follow|tweet|post)\b', text, re.IGNORECASE)),
+            'has_navigation': bool(re.search(r'\b(home|back|next|previous|menu|settings)\b', text, re.IGNORECASE))
+        }
+        
+        structured.update(patterns)
+        
+        return structured
+    
     @log_performance
     @log_exceptions("eidolon.analyzer")
     def extract_text(self, image_path: Union[str, Path, Image.Image]) -> ExtractedText:
@@ -445,7 +676,10 @@ class Analyzer:
                     text="",
                     confidence=0.0,
                     language="en",
-                    method="none"
+                    method="none",
+                    urls=[],
+                    titles=[],
+                    structured_content={}
                 )
                 
         except Exception as e:
@@ -454,7 +688,10 @@ class Analyzer:
                 text="",
                 confidence=0.0,
                 language="en",
-                method="error"
+                method="error",
+                urls=[],
+                titles=[],
+                structured_content={}
             )
     
     def _extract_with_tesseract(self, image: Image.Image, confidence_threshold: float) -> Optional[ExtractedText]:
@@ -491,12 +728,20 @@ class Analyzer:
             # Join text
             full_text = ' '.join(all_text)
             
+            # Enhanced extraction: URLs, titles, and structured content
+            urls = self._extract_urls_from_text(full_text, regions)
+            titles = self._extract_titles_from_text(full_text, regions)
+            structured_content = self._extract_structured_content(full_text, regions, urls)
+            
             return ExtractedText(
                 text=full_text,
                 confidence=overall_confidence,
                 language="en",
                 regions=regions,
-                method="tesseract"
+                method="tesseract",
+                urls=urls,
+                titles=titles,
+                structured_content=structured_content
             )
             
         except Exception as e:
@@ -542,12 +787,20 @@ class Analyzer:
             # Join text
             full_text = ' '.join(all_text)
             
+            # Enhanced extraction: URLs, titles, and structured content
+            urls = self._extract_urls_from_text(full_text, regions)
+            titles = self._extract_titles_from_text(full_text, regions)
+            structured_content = self._extract_structured_content(full_text, regions, urls)
+            
             return ExtractedText(
                 text=full_text,
                 confidence=overall_confidence,
                 language="en",
                 regions=regions,
-                method="easyocr"
+                method="easyocr",
+                urls=urls,
+                titles=titles,
+                structured_content=structured_content
             )
             
         except Exception as e:
@@ -663,7 +916,7 @@ class Analyzer:
             tags = self._extract_tags(content_type, text)
             
             # Detect UI elements
-            ui_elements = self._detect_ui_elements(text)
+            ui_elements = self._detect_ui_elements(description, text)
             
             # Perform vision analysis with Florence-2 if available
             vision_analysis = None
@@ -704,6 +957,150 @@ class Analyzer:
                 description=f"Analysis failed: {str(e)}",
                 confidence=0.0,
                 tags=["error"]
+            )
+    
+    @log_performance
+    async def analyze_content_with_llm(self, image_path: Union[str, Path], text: str = "") -> ContentAnalysis:
+        """
+        Enhanced content analysis using LLM for smart understanding.
+        
+        Args:
+            image_path: Path to the image file.
+            text: Optional extracted text for context.
+            
+        Returns:
+            ContentAnalysis: Enhanced analysis results with LLM insights.
+        """
+        try:
+            # Start with basic analysis
+            basic_analysis = self.analyze_content(image_path, text)
+            
+            # If LLM enhancement is not available or disabled, return basic analysis
+            if not self._llm_enhanced or not self._cloud_api:
+                return basic_analysis
+            
+            # Extract text if not provided
+            if not text:
+                extracted = self.extract_text(image_path)
+                text = extracted.text
+            
+            # Skip LLM analysis for empty or very short text
+            if not text or len(text.strip()) < 10:
+                return basic_analysis
+            
+            # Build comprehensive context for LLM
+            context = self._build_llm_context(basic_analysis, text)
+            
+            # Create intelligent analysis prompt
+            prompt = f"""Analyze this screenshot content and provide intelligent insights:
+
+**Content Type:** {basic_analysis.content_type}
+**OCR Text:** {text[:1500]}...  # Limit text for token efficiency
+**UI Elements:** {', '.join([elem.get('type', 'unknown') for elem in basic_analysis.ui_elements])}
+**Basic Tags:** {', '.join(basic_analysis.tags)}
+
+Please provide a JSON response with:
+1. "activity_description": What the user was doing (be specific)
+2. "key_information": Important data or content visible
+3. "context_significance": Why this activity matters
+4. "actionable_insights": Helpful suggestions or next steps
+5. "enhanced_tags": 3-5 relevant tags for this content
+6. "confidence": Analysis confidence (0.0-1.0)
+
+Focus on being practical and useful. Analyze the specific content shown."""
+            
+            # Get LLM analysis
+            response = await self._cloud_api.analyze_text(prompt, "general")
+            
+            if response and response.content:
+                enhanced_analysis = self._parse_llm_response(response.content, basic_analysis)
+                self.logger.debug("LLM-enhanced content analysis completed")
+                return enhanced_analysis
+            else:
+                self.logger.warning("LLM analysis returned empty response")
+                return basic_analysis
+                
+        except Exception as e:
+            self.logger.error(f"LLM-enhanced analysis failed: {e}")
+            # Fallback to basic analysis
+            return self.analyze_content(image_path, text)
+    
+    def _build_llm_context(self, analysis: ContentAnalysis, text: str) -> Dict[str, Any]:
+        """Build comprehensive context for LLM analysis."""
+        return {
+            'basic_analysis': analysis.to_dict(),
+            'ocr_text': text,
+            'ui_elements': analysis.ui_elements,
+            'content_type': analysis.content_type,
+            'extracted_data': {
+                'urls': self._extract_urls(text),
+                'commands': self._extract_terminal_command(text) if analysis.content_type == 'terminal' else None,
+                'error_info': self._extract_error_info('', text) if 'error' in analysis.tags else None
+            }
+        }
+    
+    def _parse_llm_response(self, llm_response: str, basic_analysis: ContentAnalysis) -> ContentAnalysis:
+        """Parse LLM response and create enhanced ContentAnalysis."""
+        try:
+            import json
+            
+            # Try to extract JSON from response
+            json_start = llm_response.find('{')
+            json_end = llm_response.rfind('}') + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = llm_response[json_start:json_end]
+                parsed = json.loads(json_str)
+                
+                # Create enhanced analysis
+                return ContentAnalysis(
+                    content_type=basic_analysis.content_type,
+                    description=parsed.get('activity_description', basic_analysis.description),
+                    confidence=parsed.get('confidence', basic_analysis.confidence),
+                    tags=parsed.get('enhanced_tags', basic_analysis.tags),
+                    ui_elements=basic_analysis.ui_elements,
+                    vision_analysis=basic_analysis.vision_analysis,
+                    metadata={
+                        **basic_analysis.metadata,
+                        'llm_enhanced': True,
+                        'key_information': parsed.get('key_information', ''),
+                        'context_significance': parsed.get('context_significance', ''),
+                        'actionable_insights': parsed.get('actionable_insights', ''),
+                        'llm_raw_response': llm_response
+                    }
+                )
+            else:
+                # If no valid JSON, use raw response as enhanced description
+                return ContentAnalysis(
+                    content_type=basic_analysis.content_type,
+                    description=llm_response[:500],  # Limit description length
+                    confidence=min(basic_analysis.confidence + 0.2, 1.0),  # Slight confidence boost
+                    tags=basic_analysis.tags + ['llm_analyzed'],
+                    ui_elements=basic_analysis.ui_elements,
+                    vision_analysis=basic_analysis.vision_analysis,
+                    metadata={
+                        **basic_analysis.metadata,
+                        'llm_enhanced': True,
+                        'llm_raw_response': llm_response
+                    }
+                )
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to parse LLM response: {e}")
+            # Return enhanced basic analysis with LLM response as metadata
+            return ContentAnalysis(
+                content_type=basic_analysis.content_type,
+                description=basic_analysis.description,
+                confidence=basic_analysis.confidence,
+                tags=basic_analysis.tags + ['llm_attempted'],
+                ui_elements=basic_analysis.ui_elements,
+                vision_analysis=basic_analysis.vision_analysis,
+                metadata={
+                    **basic_analysis.metadata,
+                    'llm_enhanced': False,
+                    'llm_error': str(e),
+                    'llm_raw_response': llm_response
+                }
             )
     
     def _generate_description(self, content_type: str, text: str) -> str:
@@ -773,44 +1170,7 @@ class Analyzer:
         
         return tags
     
-    def _detect_ui_elements(self, text: str) -> List[Dict[str, Any]]:
-        """Detect UI elements from text."""
-        ui_elements = []
-        
-        if not text:
-            return ui_elements
-        
-        # Common UI element patterns
-        button_patterns = [
-            r"\b(Save|Cancel|OK|Apply|Submit|Send|Delete|Edit|Create|Update)\b",
-            r"\b(Yes|No|Continue|Back|Next|Finish|Close)\b",
-            r"\b(Login|Sign In|Sign Up|Log Out|Register)\b"
-        ]
-        
-        menu_patterns = [
-            r"\b(File|Edit|View|Tools|Help|Settings|Options|Preferences)\b",
-            r"\b(Home|About|Contact|Search|Profile|Account)\b"
-        ]
-        
-        for pattern in button_patterns:
-            matches = re.finditer(pattern, text, re.IGNORECASE)
-            for match in matches:
-                ui_elements.append({
-                    "type": "button",
-                    "text": match.group(),
-                    "position": match.span()
-                })
-        
-        for pattern in menu_patterns:
-            matches = re.finditer(pattern, text, re.IGNORECASE)
-            for match in matches:
-                ui_elements.append({
-                    "type": "menu",
-                    "text": match.group(),
-                    "position": match.span()
-                })
-        
-        return ui_elements
+
     
     def _calculate_analysis_confidence(self, text: str, content_type: str) -> float:
         """Calculate confidence score for content analysis."""
@@ -860,7 +1220,7 @@ class Analyzer:
             return self._analyze_with_basic_ai(image_path)
     
     def _analyze_with_florence_model_pool(self, image_path: Union[str, Path]) -> Optional[VisionAnalysis]:
-        """Analyze using Florence-2 model pool for maximum performance."""
+        """Analyze using Florence-2 model pool with enhanced domain and video detection."""
         # Get available model from pool for parallel processing
         model = self._get_available_model()
         if not model:
@@ -869,52 +1229,580 @@ class Analyzer:
         # Load and prepare image
         image = Image.open(image_path).convert("RGB")
         
-        # Ultra-fast caption task with optimized parameters
-        prompt = "<MORE_DETAILED_CAPTION>"
-        inputs = self._florence_processor(text=prompt, images=image, return_tensors="pt")
+        # Enhanced analysis with domain-specific detection
+        analysis_results = self._perform_enhanced_florence_analysis(model, image)
         
-        # Create proper attention mask for maximum performance
-        if 'attention_mask' not in inputs:
-            inputs['attention_mask'] = torch.ones_like(inputs['input_ids'])
+        if not analysis_results:
+            return None
         
-        # Move inputs to GPU device for maximum speed
-        device = getattr(self, '_device', 'cpu')
-        if device != 'cpu':
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+        # Extract structured information
+        description = analysis_results.get('description', '')
+        domain_info = analysis_results.get('domain_info', {})
+        video_info = analysis_results.get('video_info', {})
+        page_info = analysis_results.get('page_info', {})
         
-        # Generate with maximum performance parameters
-        with torch.no_grad():
-            generated_ids = model.generate(
-                input_ids=inputs["input_ids"],
-                pixel_values=inputs["pixel_values"],
-                attention_mask=inputs["attention_mask"],
-                max_new_tokens=128,  # Reduced for maximum speed
-                do_sample=False,
-                num_beams=1,  # Fastest generation
-                pad_token_id=self._florence_processor.tokenizer.eos_token_id,
-                use_cache=True  # Enable KV cache for speed
-            )
-        
-        # Decode results
-        generated_text = self._florence_processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-        parsed_answer = self._florence_processor.post_process_generation(
-            generated_text, 
-            task=prompt, 
-            image_size=(image.width, image.height)
-        )
-        
-        # Extract description
-        description = parsed_answer.get(prompt, "")
-        if isinstance(description, dict):
-            description = description.get("text", str(description))
-        
-        # Create VisionAnalysis with fast processing
+        # Create enhanced VisionAnalysis with structured metadata
         return VisionAnalysis(
             description=description,
-            objects=[],
-            scene_type="unknown",
-            confidence=0.85  # High confidence for fast processing
+            objects=analysis_results.get('objects', []),
+            scene_type=domain_info.get('domain_type', 'unknown'),
+            confidence=analysis_results.get('confidence', 0.85),
+            ui_elements=analysis_results.get('ui_elements', []),
+            model_used="florence-2-enhanced",
+            metadata={
+                'domain_info': domain_info,
+                'video_info': video_info, 
+                'page_info': page_info,
+                'enhanced_analysis': True
+            }
         )
+    
+    def _perform_enhanced_florence_analysis(self, model, image) -> Optional[Dict[str, Any]]:
+        """Perform enhanced Florence-2 analysis with domain-specific detection."""
+        try:
+            # Get processor from model pool
+            processor = self._florence_processor
+            
+            # Step 1: Basic detailed caption
+            basic_prompt = "<MORE_DETAILED_CAPTION>"
+            inputs = processor(text=basic_prompt, images=image, return_tensors="pt")
+            
+            # Create proper attention mask
+            if 'attention_mask' not in inputs:
+                inputs['attention_mask'] = torch.ones_like(inputs['input_ids'])
+            
+            # Move to device
+            device = getattr(self, '_device', 'cpu')
+            if device != 'cpu':
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+            
+            # Generate basic description
+            with torch.no_grad():
+                generated_ids = model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    attention_mask=inputs["attention_mask"],
+                    max_new_tokens=256,
+                    do_sample=False,
+                    num_beams=1,
+                    pad_token_id=processor.tokenizer.eos_token_id
+                )
+            
+            generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+            parsed_answer = processor.post_process_generation(
+                generated_text, 
+                task=basic_prompt, 
+                image_size=(image.width, image.height)
+            )
+            
+            description = ""
+            if isinstance(parsed_answer, dict) and basic_prompt in parsed_answer:
+                desc_value = parsed_answer[basic_prompt]
+                # Handle case where the value is a list
+                if isinstance(desc_value, list):
+                    description = " ".join(str(item) for item in desc_value)
+                else:
+                    description = str(desc_value)
+            
+            # Step 2: Object detection for UI elements
+            ocr_prompt = "<OCR_WITH_REGION>"
+            inputs_ocr = processor(text=ocr_prompt, images=image, return_tensors="pt")
+            if 'attention_mask' not in inputs_ocr:
+                inputs_ocr['attention_mask'] = torch.ones_like(inputs_ocr['input_ids'])
+            
+            if device != 'cpu':
+                inputs_ocr = {k: v.to(device) for k, v in inputs_ocr.items()}
+            
+            with torch.no_grad():
+                generated_ids_ocr = model.generate(
+                    input_ids=inputs_ocr["input_ids"],
+                    pixel_values=inputs_ocr["pixel_values"],
+                    attention_mask=inputs_ocr["attention_mask"],
+                    max_new_tokens=512,
+                    do_sample=False,
+                    num_beams=1,
+                    pad_token_id=processor.tokenizer.eos_token_id
+                )
+            
+            generated_text_ocr = processor.batch_decode(generated_ids_ocr, skip_special_tokens=False)[0]
+            parsed_ocr = processor.post_process_generation(
+                generated_text_ocr, 
+                task=ocr_prompt, 
+                image_size=(image.width, image.height)
+            )
+            
+            # Extract OCR text for domain detection
+            ocr_text = ""
+            if isinstance(parsed_ocr, dict) and ocr_prompt in parsed_ocr:
+                ocr_data = parsed_ocr[ocr_prompt]
+                if isinstance(ocr_data, dict):
+                    # Extract text from different possible formats
+                    if 'labels' in ocr_data and isinstance(ocr_data['labels'], list):
+                        # Join all text labels
+                        ocr_text = " ".join(str(label) for label in ocr_data['labels'])
+                    elif 'quad_boxes' in ocr_data and isinstance(ocr_data['quad_boxes'], list):
+                        # Sometimes text is in quad_boxes
+                        ocr_text = " ".join(str(box) for box in ocr_data['quad_boxes'])
+                elif isinstance(ocr_data, list):
+                    # Handle list format
+                    ocr_text = " ".join(str(item) for item in ocr_data)
+                elif isinstance(ocr_data, str):
+                    ocr_text = ocr_data
+            
+            # Step 3: Domain-specific detection
+            domain_info = self._detect_domain_context(description, ocr_text)
+            
+            # Step 4: Extract video/content information based on domain
+            video_info = {}
+            page_info = {}
+            terminal_info = {}
+            ide_info = {}
+            dev_info = {}
+            error_info = {}
+            
+            if domain_info.get('domain_type') == 'youtube':
+                video_info = self._extract_youtube_info(description, ocr_text)
+            elif domain_info.get('domain_type') == 'netflix':
+                video_info = self._extract_netflix_info(description, ocr_text)
+            elif domain_info.get('domain_type') == 'browser':
+                page_info = self._extract_browser_info(description, ocr_text)
+            elif domain_info.get('domain_type') == 'video_streaming':
+                video_info = self._extract_generic_video_info(description, ocr_text)
+            elif domain_info.get('domain_type') == 'terminal':
+                terminal_info = self._extract_terminal_info(description, ocr_text)
+            elif domain_info.get('domain_type') == 'ide':
+                ide_info = self._extract_ide_info(description, ocr_text)
+            elif domain_info.get('domain_type') == 'development':
+                dev_info = self._extract_development_info(description, ocr_text)
+            elif domain_info.get('domain_type') == 'error':
+                error_info = self._extract_error_info(description, ocr_text)
+            
+            # Step 5: UI element detection
+            ui_elements = self._detect_ui_elements(description, ocr_text)
+            
+            # Step 6: Object detection for comprehensive analysis
+            objects = self._extract_objects_from_description(description)
+            
+            return {
+                'description': description,
+                'domain_info': domain_info,
+                'video_info': video_info,
+                'page_info': page_info,
+                'terminal_info': terminal_info,
+                'ide_info': ide_info,
+                'dev_info': dev_info,
+                'error_info': error_info,
+                'objects': objects,
+                'ui_elements': ui_elements,
+                'confidence': 0.85,
+                'ocr_text': ocr_text
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Enhanced Florence analysis failed: {e}")
+            return None
+    
+    def _detect_domain_context(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Detect the domain/platform context from visual and text content."""
+        combined_text = f"{description} {ocr_text}".lower()
+        
+        # YouTube detection patterns
+        youtube_patterns = [
+            'youtube', 'subscribe', 'like this video', 'watch later', 'playlist',
+            'video player', 'youtube.com', 'upload', 'channel', 'views',
+            'thumbs up', 'thumbs down', 'comment', 'share video'
+        ]
+        
+        # Netflix detection patterns
+        netflix_patterns = [
+            'netflix', 'continue watching', 'my list', 'trending now',
+            'netflix original', 'watch episode', 'season', 'episode',
+            'netflix.com', 'add to my list', 'rate this'
+        ]
+        
+        # Browser/web detection patterns
+        browser_patterns = [
+            'http', 'https', 'www.', '.com', '.org', '.net', 'address bar',
+            'tab', 'bookmark', 'reload', 'back button', 'forward button',
+            'search bar', 'google chrome', 'safari', 'firefox'
+        ]
+        
+        # Video streaming patterns (generic)
+        streaming_patterns = [
+            'play button', 'pause', 'video controls', 'volume', 'fullscreen',
+            'seek bar', 'timeline', 'duration', 'streaming', 'watch now'
+        ]
+        
+        # Social media patterns
+        social_patterns = [
+            'twitter', 'facebook', 'instagram', 'tiktok', 'linkedin',
+            'post', 'tweet', 'story', 'feed', 'timeline', 'like', 'share'
+        ]
+        
+        # Terminal/CLI patterns
+        terminal_patterns = [
+            'terminal', 'console', 'command line', 'shell', 'bash', 'zsh',
+            'npm', 'yarn', 'pip', 'git', 'docker', 'kubectl', 'cargo',
+            '$', '>', '~/', 'sudo', 'cd ', 'ls ', 'pwd', 'mkdir', 'rm ',
+            'python', 'node', 'ruby', 'go run', 'make', 'gcc', 'javac',
+            'git clone', 'git pull', 'git push', 'git commit', 'git status'
+        ]
+        
+        # IDE/Code editor patterns
+        ide_patterns = [
+            'vscode', 'visual studio code', 'sublime', 'atom', 'intellij',
+            'pycharm', 'webstorm', 'vim', 'neovim', 'emacs', 'xcode',
+            'line numbers', 'syntax highlighting', 'code editor', 'debugger',
+            'breakpoint', 'function', 'class', 'import', 'export', 'const',
+            'def ', 'if ', 'for ', 'while ', 'return', '{', '}', '()', '=>'
+        ]
+        
+        # Development/coding patterns
+        dev_patterns = [
+            'localhost', 'port', 'api', 'endpoint', 'database', 'server',
+            'client', 'frontend', 'backend', 'fullstack', 'react', 'vue',
+            'angular', 'django', 'flask', 'express', 'spring', 'rails',
+            'component', 'state', 'props', 'hooks', 'lifecycle', 'router',
+            'testing', 'jest', 'pytest', 'mocha', 'unit test', 'integration'
+        ]
+        
+        # Documentation patterns
+        doc_patterns = [
+            'documentation', 'readme', 'markdown', 'api docs', 'tutorial',
+            'guide', 'reference', 'example', 'usage', 'installation',
+            'getting started', 'configuration', 'setup', 'quickstart'
+        ]
+        
+        # Error/debugging patterns
+        error_patterns = [
+            'error', 'exception', 'failed', 'failure', 'crash', 'bug',
+            'traceback', 'stack trace', 'undefined', 'null', 'none',
+            'warning', 'deprecated', 'fatal', 'critical', 'alert',
+            'syntaxerror', 'typeerror', 'valueerror', 'keyerror',
+            'cannot find', 'not found', 'missing', 'invalid', 'incorrect'
+        ]
+        
+        # Success patterns
+        success_patterns = [
+            'success', 'successful', 'completed', 'done', 'passed',
+            'build successful', 'tests passed', 'deployed', 'merged',
+            'commit', 'pushed', 'published', 'released', 'fixed'
+        ]
+        
+        # Calculate scores for each domain
+        youtube_score = sum(1 for pattern in youtube_patterns if pattern in combined_text)
+        netflix_score = sum(1 for pattern in netflix_patterns if pattern in combined_text)
+        browser_score = sum(1 for pattern in browser_patterns if pattern in combined_text)
+        streaming_score = sum(1 for pattern in streaming_patterns if pattern in combined_text)
+        social_score = sum(1 for pattern in social_patterns if pattern in combined_text)
+        terminal_score = sum(1 for pattern in terminal_patterns if pattern in combined_text)
+        ide_score = sum(1 for pattern in ide_patterns if pattern in combined_text)
+        dev_score = sum(1 for pattern in dev_patterns if pattern in combined_text)
+        doc_score = sum(1 for pattern in doc_patterns if pattern in combined_text)
+        error_score = sum(1 for pattern in error_patterns if pattern in combined_text)
+        success_score = sum(1 for pattern in success_patterns if pattern in combined_text)
+        
+        # Determine domain type
+        scores = {
+            'youtube': youtube_score,
+            'netflix': netflix_score,
+            'browser': browser_score,
+            'video_streaming': streaming_score,
+            'social_media': social_score,
+            'terminal': terminal_score,
+            'ide': ide_score,
+            'development': dev_score,
+            'documentation': doc_score,
+            'error': error_score,
+            'success': success_score
+        }
+        
+        max_score = max(scores.values())
+        domain_type = 'unknown'
+        confidence = 0.0
+        
+        if max_score > 0:
+            domain_type = max(scores, key=scores.get)
+            confidence = min(max_score / 5.0, 1.0)  # Normalize to 0-1
+        
+        # Collect all patterns for comprehensive detection
+        all_patterns = (youtube_patterns + netflix_patterns + browser_patterns + 
+                       streaming_patterns + social_patterns + terminal_patterns + 
+                       ide_patterns + dev_patterns + doc_patterns + 
+                       error_patterns + success_patterns)
+        
+        # Extract specific command if terminal activity
+        extracted_command = None
+        if terminal_score > 0:
+            extracted_command = self._extract_terminal_command(combined_text)
+        
+        return {
+            'domain_type': domain_type,
+            'confidence': confidence,
+            'scores': scores,
+            'detected_patterns': [pattern for pattern in all_patterns if pattern in combined_text],
+            'extracted_command': extracted_command,
+            'has_error': error_score > 0,
+            'has_success': success_score > 0
+        }
+    
+    def _extract_youtube_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract YouTube-specific information."""
+        combined_text = f"{description} {ocr_text}"
+        
+        video_info = {
+            'platform': 'youtube',
+            'video_title': '',
+            'channel_name': '',
+            'duration': '',
+            'view_count': '',
+            'upload_date': '',
+            'description_snippet': ''
+        }
+        
+        # Extract video title (usually the longest text element)
+
+        
+        # Look for patterns that might be video titles
+        title_patterns = [
+            r'([A-Z][^.!?]*[.!?])',  # Sentences starting with capital
+            r'([^|]+)\s*\|\s*YouTube',  # Text before | YouTube
+            r'([^-]+)\s*-\s*YouTube'   # Text before - YouTube
+        ]
+        
+        for pattern in title_patterns:
+            matches = re.findall(pattern, combined_text)
+            if matches:
+                video_info['video_title'] = matches[0].strip()
+                break
+        
+        # Extract channel name
+        channel_patterns = [
+            r'by\s+([A-Za-z0-9\s]+)',
+            r'channel:\s*([A-Za-z0-9\s]+)',
+            r'@([A-Za-z0-9_]+)'
+        ]
+        
+        for pattern in channel_patterns:
+            matches = re.findall(pattern, combined_text, re.IGNORECASE)
+            if matches:
+                video_info['channel_name'] = matches[0].strip()
+                break
+        
+        # Extract duration
+        duration_pattern = r'(\d{1,2}:\d{2}(?::\d{2})?)'
+        duration_matches = re.findall(duration_pattern, combined_text)
+        if duration_matches:
+            video_info['duration'] = duration_matches[0]
+        
+        # Extract view count
+        view_patterns = [
+            r'([\d,]+)\s*views?',
+            r'([\d.]+[KMB])\s*views?'
+        ]
+        
+        for pattern in view_patterns:
+            matches = re.findall(pattern, combined_text, re.IGNORECASE)
+            if matches:
+                video_info['view_count'] = matches[0]
+                break
+        
+        return video_info
+    
+    def _extract_netflix_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract Netflix-specific information."""
+        combined_text = f"{description} {ocr_text}"
+        
+        video_info = {
+            'platform': 'netflix',
+            'title': '',
+            'season': '',
+            'episode': '',
+            'duration': '',
+            'genre': '',
+            'rating': ''
+        }
+        
+
+        
+        # Extract title
+        title_patterns = [
+            r'([A-Z][^|]+)\s*\|\s*Netflix',
+            r'([A-Z][^-]+)\s*-\s*Netflix',
+            r'(?:watching|continue)\s+([A-Z][^.!?]+)'
+        ]
+        
+        for pattern in title_patterns:
+            matches = re.findall(pattern, combined_text, re.IGNORECASE)
+            if matches:
+                video_info['title'] = matches[0].strip()
+                break
+        
+        # Extract season/episode info
+        season_pattern = r'[Ss]eason\s+(\d+)'
+        episode_pattern = r'[Ee]pisode\s+(\d+)'
+        
+        season_match = re.search(season_pattern, combined_text)
+        if season_match:
+            video_info['season'] = season_match.group(1)
+        
+        episode_match = re.search(episode_pattern, combined_text)
+        if episode_match:
+            video_info['episode'] = episode_match.group(1)
+        
+        # Extract duration
+        duration_pattern = r'(\d{1,2}:\d{2}(?::\d{2})?)'
+        duration_matches = re.findall(duration_pattern, combined_text)
+        if duration_matches:
+            video_info['duration'] = duration_matches[0]
+        
+        return video_info
+    
+    def _extract_browser_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract browser/webpage information."""
+        combined_text = f"{description} {ocr_text}"
+        
+        page_info = {
+            'type': 'webpage',
+            'url': '',
+            'title': '',
+            'domain': '',
+            'search_query': ''
+        }
+        
+
+        
+        # Extract URLs
+        url_patterns = [
+            r'(https?://[^\s]+)',
+            r'(www\.[^\s]+\.[a-z]{2,})',
+            r'([a-zA-Z0-9-]+\.[a-z]{2,}(?:/[^\s]*)?)'
+        ]
+        
+        for pattern in url_patterns:
+            matches = re.findall(pattern, combined_text)
+            if matches:
+                url = matches[0]
+                page_info['url'] = url
+                # Extract domain
+                domain_match = re.search(r'(?:https?://)?(?:www\.)?([^/]+)', url)
+                if domain_match:
+                    page_info['domain'] = domain_match.group(1)
+                break
+        
+        # Extract page title (usually appears in browser tab or header)
+        title_patterns = [
+            r'([A-Z][^|]+)\s*\|\s*[A-Z]',  # Title | Site
+            r'([A-Z][^-]+)\s*-\s*[A-Z]',   # Title - Site
+        ]
+        
+        for pattern in title_patterns:
+            matches = re.findall(pattern, combined_text)
+            if matches:
+                page_info['title'] = matches[0].strip()
+                break
+        
+        # Extract search queries (for search engines)
+        search_patterns = [
+            r'search.*?["\']([^"\']+)["\']',
+            r'q=([^&\s]+)',
+            r'search:\s*([^\n]+)'
+        ]
+        
+        for pattern in search_patterns:
+            matches = re.findall(pattern, combined_text, re.IGNORECASE)
+            if matches:
+                page_info['search_query'] = matches[0].strip()
+                break
+        
+        return page_info
+    
+    def _extract_generic_video_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract generic video streaming information."""
+        combined_text = f"{description} {ocr_text}"
+        
+        video_info = {
+            'platform': 'video_streaming',
+            'title': '',
+            'duration': '',
+            'current_time': '',
+            'controls_visible': False
+        }
+        
+
+        
+        # Extract duration and current time
+        time_patterns = [
+            r'(\d{1,2}:\d{2}(?::\d{2})?)\s*/\s*(\d{1,2}:\d{2}(?::\d{2})?)',  # current/total
+            r'(\d{1,2}:\d{2}(?::\d{2})?)'  # any time format
+        ]
+        
+        for pattern in time_patterns:
+            matches = re.findall(pattern, combined_text)
+            if matches:
+                if len(matches[0]) == 2:  # current/total format
+                    video_info['current_time'] = matches[0][0]
+                    video_info['duration'] = matches[0][1]
+                else:
+                    video_info['duration'] = matches[0]
+                break
+        
+        # Check for video controls
+        control_keywords = ['play', 'pause', 'volume', 'fullscreen', 'seek', 'timeline']
+        video_info['controls_visible'] = any(keyword in combined_text.lower() for keyword in control_keywords)
+        
+        return video_info
+    
+    def _detect_ui_elements(self, description: str, ocr_text: str) -> List[Dict[str, Any]]:
+        """Detect UI elements from the analysis."""
+        combined_text = f"{description} {ocr_text}".lower()
+        ui_elements = []
+        
+        # Common UI elements to detect
+        ui_patterns = {
+            'button': ['button', 'click', 'press'],
+            'menu': ['menu', 'dropdown', 'options'],
+            'text_field': ['input', 'text field', 'search box'],
+            'tab': ['tab', 'navigation'],
+            'dialog': ['dialog', 'popup', 'modal'],
+            'icon': ['icon', 'symbol'],
+            'link': ['link', 'hyperlink', 'url'],
+            'image': ['image', 'picture', 'photo'],
+            'video': ['video', 'player', 'playback'],
+            'list': ['list', 'items', 'entries']
+        }
+        
+        for element_type, patterns in ui_patterns.items():
+            if any(pattern in combined_text for pattern in patterns):
+                ui_elements.append({
+                    'type': element_type,
+                    'confidence': 0.7,
+                    'detected_by': 'text_analysis'
+                })
+        
+        return ui_elements
+    
+    def _extract_objects_from_description(self, description: str) -> List[Dict[str, Any]]:
+        """Extract objects mentioned in the description."""
+        objects = []
+        
+        # Common objects to look for in descriptions
+        object_keywords = [
+            'person', 'people', 'face', 'hand', 'screen', 'computer', 'laptop',
+            'phone', 'tablet', 'keyboard', 'mouse', 'window', 'door', 'car',
+            'book', 'paper', 'pen', 'desk', 'chair', 'table', 'building'
+        ]
+        
+        description_lower = description.lower()
+        for keyword in object_keywords:
+            if keyword in description_lower:
+                objects.append({
+                    'name': keyword,
+                    'confidence': 0.6,
+                    'source': 'description_analysis'
+                })
+        
+        return objects
     
     def _analyze_with_florence_model(self, image_path: Union[str, Path]) -> Optional[VisionAnalysis]:
         """Analyze using Florence-2 model."""
@@ -1389,3 +2277,292 @@ class Analyzer:
                 'char_count': len(text)
             }
         }
+    
+    def _extract_terminal_command(self, text: str) -> Optional[str]:
+        """Extract the most recent terminal command from text."""
+        if not text:
+            return None
+        
+        # Look for common command patterns
+        command_patterns = [
+            r'^\$\s+(.+)$',  # Unix shell
+            r'^>\s+(.+)$',   # PowerShell/Windows
+            r'^%\s+(.+)$',   # zsh
+            r'^[a-zA-Z_][\w]*@[a-zA-Z_][\w]*[~$#]\s+(.+)$',  # Full prompt
+        ]
+        
+        lines = text.split('\n')
+        for line in reversed(lines):  # Start from bottom (most recent)
+            line = line.strip()
+            for pattern in command_patterns:
+                match = re.match(pattern, line, re.MULTILINE)
+                if match:
+                    return match.group(1).strip()
+        
+        # If no prompt found, look for known commands
+        known_commands = ['git', 'npm', 'pip', 'docker', 'make', 'python', 'node', 'cargo']
+        for line in reversed(lines):
+            words = line.strip().split()
+            if words and words[0] in known_commands:
+                return line.strip()
+        
+        return None
+    
+    def _extract_terminal_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract terminal/CLI specific information."""
+        combined_text = f"{description} {ocr_text}"
+        
+        terminal_info = {
+            'type': 'terminal',
+            'shell_type': 'unknown',
+            'current_directory': '',
+            'command': '',
+            'output': '',
+            'error_detected': False
+        }
+        
+        # Extract command
+        command = self._extract_terminal_command(combined_text)
+        if command:
+            terminal_info['command'] = command
+            
+            # Detect command type
+            if command.startswith('git'):
+                terminal_info['command_type'] = 'version_control'
+            elif any(cmd in command for cmd in ['npm', 'yarn', 'pip', 'cargo']):
+                terminal_info['command_type'] = 'package_manager'
+            elif any(cmd in command for cmd in ['python', 'node', 'java', 'go']):
+                terminal_info['command_type'] = 'runtime_execution'
+            elif any(cmd in command for cmd in ['cd', 'ls', 'pwd', 'mkdir']):
+                terminal_info['command_type'] = 'file_system'
+        
+        # Extract current directory
+        dir_patterns = [
+            r'[\w@\-]+:([\w/\-~\.]+)[$#>]',  # Unix prompt with path
+            r'PS\s+([A-Z]:\\[\w\\]+)>',       # PowerShell
+            r'~/([\w/\-\.]+)',                # Home directory path
+        ]
+        
+        for pattern in dir_patterns:
+            match = re.search(pattern, combined_text)
+            if match:
+                terminal_info['current_directory'] = match.group(1)
+                break
+        
+        # Detect errors
+        error_keywords = ['error:', 'failed', 'exception', 'traceback', 'fatal:']
+        if any(keyword in combined_text.lower() for keyword in error_keywords):
+            terminal_info['error_detected'] = True
+        
+        return terminal_info
+    
+    def _extract_ide_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract IDE/code editor specific information."""
+        combined_text = f"{description} {ocr_text}"
+        
+        ide_info = {
+            'type': 'ide',
+            'editor': 'unknown',
+            'file_path': '',
+            'language': '',
+            'current_function': '',
+            'line_numbers_visible': False
+        }
+        
+        # Detect IDE type
+        ide_patterns = {
+            'vscode': ['visual studio code', 'vs code', 'code -', '.vscode'],
+            'pycharm': ['pycharm', 'jetbrains'],
+            'sublime': ['sublime text', 'subl'],
+            'vim': ['vim', 'neovim', 'nvim', '~/.vimrc'],
+            'emacs': ['emacs', 'gnu emacs'],
+            'xcode': ['xcode', 'xcodeproj']
+        }
+        
+        for ide, patterns in ide_patterns.items():
+            if any(pattern in combined_text.lower() for pattern in patterns):
+                ide_info['editor'] = ide
+                break
+        
+        # Extract file path
+        file_patterns = [
+            r'([/\\][\w\-/\\\.]+\.\w+)',  # Unix/Windows paths
+            r'(\w+\.\w+)',                 # Simple filename
+        ]
+        
+        for pattern in file_patterns:
+            match = re.search(pattern, combined_text)
+            if match:
+                ide_info['file_path'] = match.group(1)
+                # Detect language from extension
+                ext = match.group(1).split('.')[-1].lower()
+                language_map = {
+                    'py': 'python', 'js': 'javascript', 'ts': 'typescript',
+                    'java': 'java', 'cpp': 'cpp', 'c': 'c', 'go': 'go',
+                    'rs': 'rust', 'rb': 'ruby', 'php': 'php', 'swift': 'swift'
+                }
+                ide_info['language'] = language_map.get(ext, ext)
+                break
+        
+        # Detect current function/method
+        function_patterns = [
+            r'def\s+(\w+)\s*\(',          # Python
+            r'function\s+(\w+)\s*\(',     # JavaScript
+            r'func\s+(\w+)\s*\(',         # Go
+            r'fn\s+(\w+)\s*\(',           # Rust
+            r'public\s+\w+\s+(\w+)\s*\(', # Java/C#
+        ]
+        
+        for pattern in function_patterns:
+            match = re.search(pattern, combined_text)
+            if match:
+                ide_info['current_function'] = match.group(1)
+                break
+        
+        # Check for line numbers
+        if re.search(r'^\s*\d+\s+', combined_text, re.MULTILINE):
+            ide_info['line_numbers_visible'] = True
+        
+        return ide_info
+    
+    def _extract_development_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract development/project specific information."""
+        combined_text = f"{description} {ocr_text}"
+        text_lower = combined_text.lower()
+        
+        dev_info = {
+            'type': 'development',
+            'activity': 'coding',
+            'framework': '',
+            'feature': '',
+            'testing': False,
+            'debugging': False
+        }
+        
+        # Detect frameworks
+        framework_patterns = {
+            'react': ['react', 'jsx', 'usestate', 'useeffect'],
+            'angular': ['angular', '@component', 'ng-'],
+            'vue': ['vue', 'v-model', 'v-for'],
+            'django': ['django', 'models.py', 'views.py'],
+            'flask': ['flask', 'app.route', '@app.route'],
+            'express': ['express', 'app.get', 'app.post'],
+            'spring': ['spring', '@autowired', '@service'],
+            'rails': ['rails', 'activerecord', 'erb']
+        }
+        
+        for framework, patterns in framework_patterns.items():
+            if any(pattern in text_lower for pattern in patterns):
+                dev_info['framework'] = framework
+                break
+        
+        # Detect activity type
+        if any(word in text_lower for word in ['test', 'spec', 'jest', 'pytest', 'unittest']):
+            dev_info['testing'] = True
+            dev_info['activity'] = 'testing'
+        elif any(word in text_lower for word in ['debug', 'breakpoint', 'console.log', 'print(']):
+            dev_info['debugging'] = True
+            dev_info['activity'] = 'debugging'
+        elif any(word in text_lower for word in ['implement', 'feature', 'add', 'create']):
+            dev_info['activity'] = 'implementing'
+        elif any(word in text_lower for word in ['fix', 'bug', 'issue', 'patch']):
+            dev_info['activity'] = 'bugfixing'
+        elif any(word in text_lower for word in ['refactor', 'clean', 'optimize']):
+            dev_info['activity'] = 'refactoring'
+        
+        # Try to extract feature/component name
+        feature_patterns = [
+            r'(?:implement|add|create|build)\s+(\w+)',
+            r'(?:class|component|function)\s+(\w+)',
+            r'// TODO:\s*(.+)',
+            r'# TODO:\s*(.+)',
+        ]
+        
+        for pattern in feature_patterns:
+            match = re.search(pattern, combined_text, re.IGNORECASE)
+            if match:
+                dev_info['feature'] = match.group(1).strip()
+                break
+        
+        return dev_info
+    
+    def _extract_error_info(self, description: str, ocr_text: str) -> Dict[str, Any]:
+        """Extract error and debugging information."""
+        combined_text = f"{description} {ocr_text}"
+        
+        error_info = {
+            'type': 'error',
+            'error_type': '',
+            'error_message': '',
+            'file_location': '',
+            'line_number': 0,
+            'severity': 'error',
+            'stack_trace': []
+        }
+        
+        # Extract error type
+        error_patterns = {
+            'syntax': ['syntaxerror', 'syntax error', 'unexpected token'],
+            'type': ['typeerror', 'type error', 'cannot read property'],
+            'reference': ['referenceerror', 'undefined', 'not defined'],
+            'value': ['valueerror', 'invalid value'],
+            'index': ['indexerror', 'list index out of range'],
+            'key': ['keyerror', 'key not found'],
+            'attribute': ['attributeerror', 'has no attribute'],
+            'import': ['importerror', 'modulenotfounderror', 'cannot import'],
+            'runtime': ['runtimeerror', 'runtime exception'],
+            'assertion': ['assertionerror', 'assertion failed']
+        }
+        
+        text_lower = combined_text.lower()
+        for error_type, patterns in error_patterns.items():
+            if any(pattern in text_lower for pattern in patterns):
+                error_info['error_type'] = error_type
+                break
+        
+        # Extract error message
+        message_patterns = [
+            r'Error:\s*(.+)$',
+            r'Exception:\s*(.+)$',
+            r'Failed:\s*(.+)$',
+            r'\w+Error:\s*(.+)$',
+        ]
+        
+        for pattern in message_patterns:
+            match = re.search(pattern, combined_text, re.MULTILINE | re.IGNORECASE)
+            if match:
+                error_info['error_message'] = match.group(1).strip()
+                break
+        
+        # Extract file location and line number
+        location_patterns = [
+            r'File "([^"]+)", line (\d+)',  # Python
+            r'at (\S+):(\d+)',               # JavaScript/General
+            r'(\w+\.\w+):(\d+)',             # Simple format
+        ]
+        
+        for pattern in location_patterns:
+            match = re.search(pattern, combined_text)
+            if match:
+                error_info['file_location'] = match.group(1)
+                error_info['line_number'] = int(match.group(2))
+                break
+        
+        # Extract stack trace lines
+        lines = combined_text.split('\n')
+        in_traceback = False
+        for line in lines:
+            if 'traceback' in line.lower():
+                in_traceback = True
+            elif in_traceback and ('  File' in line or '    at' in line):
+                error_info['stack_trace'].append(line.strip())
+            elif in_traceback and line.strip() and not line.startswith(' '):
+                break
+        
+        # Determine severity
+        if any(word in text_lower for word in ['fatal', 'critical', 'panic']):
+            error_info['severity'] = 'critical'
+        elif any(word in text_lower for word in ['warning', 'warn']):
+            error_info['severity'] = 'warning'
+        
+        return error_info

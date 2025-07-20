@@ -21,6 +21,7 @@ import numpy as np
 
 from ..utils.config import get_config
 from ..utils.logging import get_component_logger, log_performance, log_exceptions
+from ..integrations.fastmcp import get_fastmcp
 
 
 class Screenshot:
@@ -127,6 +128,7 @@ class Observer:
         # Shared components (initialize once, reuse across captures)
         self._analyzer = None
         self._database = None
+        self._fastmcp = None
         
         # Real-time processing optimization
         self._processing_queue = []
@@ -273,7 +275,7 @@ class Observer:
                 time.sleep(1)  # Prevent rapid error loops
     
     def _process_screenshot_async(self, screenshot_data: dict) -> None:
-        """Process screenshot asynchronously without blocking capture."""
+        """Process screenshot asynchronously without blocking capture with FastMCP optimization."""
         try:
             file_path = screenshot_data['file_path']
             screenshot = screenshot_data['screenshot']
@@ -281,19 +283,67 @@ class Observer:
             # Get shared components (cached for performance)
             db = self._get_database()
             analyzer = self._get_analyzer()
+            fastmcp = self._get_fastmcp()
             
             # Store in database
             screenshot_id = db.store_screenshot(screenshot.to_dict())
             
-            # Perform analysis
+            # Perform analysis with FastMCP optimization
             if self._process_screenshots:
-                extracted_text = analyzer.extract_text(file_path)
-                if extracted_text.text:  # Only store if text was found
-                    db.store_ocr_result(screenshot_id, extracted_text.to_dict())
+                # Create content data for FastMCP processing
+                content_data = {
+                    'content_type': 'screenshot',
+                    'file_path': str(file_path),
+                    'timestamp': screenshot.timestamp.isoformat(),
+                    'metadata': screenshot.to_dict()
+                }
                 
-                # Content analysis
-                content_analysis = analyzer.analyze_content(file_path, extracted_text.text)
-                db.store_content_analysis(screenshot_id, content_analysis.to_dict())
+                # Use FastMCP for optimized processing
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    # Check FastMCP cache first
+                    fastmcp_result = loop.run_until_complete(
+                        fastmcp.process_content_analysis(content_data, priority="normal")
+                    )
+                    
+                    # If FastMCP has cached results, use them; otherwise do full analysis
+                    if fastmcp_result and fastmcp_result.get('processed_by') == 'fastmcp_cached':
+                        self.logger.debug(f"Using FastMCP cached results for {file_path}")
+                        # Use cached analysis results if available
+                        if 'ocr_result' in fastmcp_result:
+                            db.store_ocr_result(screenshot_id, fastmcp_result['ocr_result'])
+                        if 'content_analysis' in fastmcp_result:
+                            db.store_content_analysis(screenshot_id, fastmcp_result['content_analysis'])
+                    else:
+                        # Perform full analysis and cache in FastMCP
+                        extracted_text = analyzer.extract_text(file_path)
+                        if extracted_text.text:  # Only store if text was found
+                            db.store_ocr_result(screenshot_id, extracted_text.to_dict())
+                        
+                        # Content analysis (enhanced with LLM if configured)
+                        content_analysis = loop.run_until_complete(
+                            analyzer.analyze_content_with_llm(file_path, extracted_text.text)
+                        )
+                        db.store_content_analysis(screenshot_id, content_analysis.to_dict())
+                        
+                        # Cache results in FastMCP for future use
+                        cache_data = content_data.copy()
+                        cache_data.update({
+                            'ocr_result': extracted_text.to_dict() if extracted_text.text else None,
+                            'content_analysis': content_analysis.to_dict(),
+                            'processed_by': 'fastmcp_cached'
+                        })
+                        
+                        # Store in FastMCP cache
+                        loop.run_until_complete(
+                            fastmcp.process_content_analysis(cache_data, priority="normal", use_cache=False)
+                        )
+                        
+                finally:
+                    loop.close()
                 
         except Exception as e:
             self.logger.error(f"Error processing screenshot async: {e}")
@@ -742,8 +792,16 @@ class Observer:
                     db.store_ocr_result(screenshot_id, extracted_text.to_dict())
                     self.logger.debug(f"OCR extracted {extracted_text.word_count} words")
                 
-                # Perform content analysis
-                content_analysis = analyzer.analyze_content(file_path, extracted_text.text)
+                # Perform content analysis (enhanced with LLM if configured)
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    content_analysis = loop.run_until_complete(
+                        analyzer.analyze_content_with_llm(file_path, extracted_text.text)
+                    )
+                finally:
+                    loop.close()
                 db.store_content_analysis(screenshot_id, content_analysis.to_dict())
                 
                 self.logger.debug(
@@ -843,6 +901,13 @@ class Observer:
             self._database = MetadataDatabase()
             self.logger.info("Database initialized and cached for reuse")
         return self._database
+    
+    def _get_fastmcp(self):
+        """Get or create FastMCP instance (singleton pattern)."""
+        if self._fastmcp is None:
+            self._fastmcp = get_fastmcp()
+            self.logger.info("FastMCP initialized and cached for reuse")
+        return self._fastmcp
     
     def _check_resource_limits(self) -> bool:
         """UNLIMITED PERFORMANCE MODE - NO RESOURCE LIMITS."""

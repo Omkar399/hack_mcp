@@ -102,6 +102,22 @@ def start(ctx, interval, background, memory_limit, low_memory):
         
         # UNLIMITED PERFORMANCE MODE - NO MEMORY CHECKS
         
+        # Initialize FastMCP for real-time processing optimization
+        from .integrations.fastmcp import initialize_fastmcp
+        import asyncio
+        
+        click.echo("⚡ Initializing FastMCP for real-time optimization...")
+        try:
+            # Initialize FastMCP in background
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            fastmcp_processor = loop.run_until_complete(initialize_fastmcp())
+            click.echo("✅ FastMCP real-time optimization enabled")
+        except Exception as e:
+            click.echo(f"⚠️  FastMCP initialization warning: {e}")
+        finally:
+            loop.close()
+        
         # Start observer with memory optimization
         observer = get_observer()
         observer.config.observer.capture_interval = interval
@@ -112,6 +128,7 @@ def start(ctx, interval, background, memory_limit, low_memory):
         observer.start_monitoring()
         
         click.echo(f"📸 Screenshot monitoring started (interval: {interval}s)")
+        click.echo("⚡ FastMCP acceleration active for real-time processing")
         
         if background:
             click.echo("🔄 Running in background mode. Use 'eidolon stop' to stop.")
@@ -132,6 +149,20 @@ def start(ctx, interval, background, memory_limit, low_memory):
                 click.echo("\n⏹️  Stopping...")
         
         observer.stop_monitoring()
+        
+        # Shutdown FastMCP
+        try:
+            from .integrations.fastmcp import shutdown_fastmcp
+            import asyncio
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(shutdown_fastmcp())
+            loop.close()
+            click.echo("⚡ FastMCP processor shutdown complete")
+        except Exception as e:
+            click.echo(f"⚠️  FastMCP shutdown warning: {e}")
+        
         click.echo("✅ Eidolon stopped successfully.")
         
     except Exception as e:

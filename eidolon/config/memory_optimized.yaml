@@ -30,6 +30,10 @@ analysis:
   max_concurrent_processes: 1  # Reduced for memory
   enable_cloud_fallback: true
   local_analysis_timeout: 30
+
+# LLM Enhanced Analysis settings
+llm_enhanced_analysis: true  # Enable LLM-powered content analysis
+llm_provider: "gemini"  # Preferred LLM provider (gemini, claude, openai)
   
 # Database settings
 database:
