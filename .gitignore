@@ -84,7 +84,6 @@ tmp/
 # Model files (large)
 *.bin
 *.safetensors
-models/
 
 # API keys and secrets
 .env.local
