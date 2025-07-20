@@ -1,0 +1,462 @@
+# Eidolon AI Personal Assistant Configuration
+# This is the main configuration file for all system components
+
+# Observer settings for screenshot capture and monitoring
+observer:
+  # Screenshot capture settings
+  capture_interval: 10                    # Seconds between automatic screenshots
+  activity_threshold: 0.05               # Change detection sensitivity (0.0-1.0)
+  storage_path: "./data/screenshots"     # Path for storing captured screenshots
+  max_storage_gb: 50                     # Maximum storage space for screenshots (GB)
+  
+  # Activity monitoring
+  monitor_keyboard: true                 # Monitor keyboard activity
+  monitor_mouse: true                    # Monitor mouse activity
+  monitor_window_changes: true           # Monitor window focus changes
+  
+  # Performance settings
+  max_cpu_percent: 20.0                  # Maximum CPU usage percentage (increased for AI models)
+  max_memory_mb: 8192                    # Maximum memory usage (8GB for AI models)
+  
+  # Timing settings
+  sleep_interval_short: 1                # Short sleep interval (seconds)
+  sleep_interval_status: 30              # Status check sleep interval (seconds)
+  
+  # Processing thresholds
+  min_area_threshold: 100                # Minimum area for object detection
+  text_confidence_threshold: 20          # Minimum confidence for text detection
+  ocr_confidence_threshold: 30           # Minimum confidence for OCR results
+  
+  # Image analysis thresholds
+  brightness_threshold_factor: 0.1       # Factor for adaptive brightness threshold
+  brightness_min_threshold: 20           # Minimum brightness threshold
+  brightness_max_threshold: 50           # Maximum brightness threshold
+  structural_similarity_threshold: 0.9   # Threshold for structural similarity
+  histogram_similarity_threshold: 0.9    # Threshold for histogram similarity
+  motion_score_threshold: 0.1            # Threshold for motion detection
+  
+  # Change detection weights
+  pixel_weight: 0.4                      # Weight for pixel differences
+  structure_weight: 0.3                  # Weight for structural changes
+  motion_weight: 0.2                     # Weight for motion detection
+  histogram_weight: 0.1                  # Weight for histogram changes
+  
+  # Adaptive threshold factors
+  structure_adjustment_factor: 0.8       # Factor when structure similarity is low
+  histogram_adjustment_factor: 1.5       # Factor when histogram is similar but motion is low
+  
+  # Performance settings
+  cpu_check_interval: 0.1                # Interval for CPU usage checks (seconds)
+  thread_join_timeout: 5.0               # Timeout for thread joining (seconds)
+  
+  # Privacy settings
+  sensitive_patterns:                    # Auto-redact these patterns
+    - "password"
+    - "api_key" 
+    - "secret"
+    - "token"
+    - "ssn"
+    - "credit_card"
+  
+  excluded_apps:                         # Don't monitor these applications
+    - "1Password"
+    - "Keychain Access"
+    - "LastPass"
+    - "Bitwarden"
+
+# Analysis settings for AI processing
+analysis:
+  # Local AI models
+  local_models:
+    vision: "microsoft/florence-2-base"
+    clip: "openai/clip-vit-base-patch32"
+    embedding: "sentence-transformers/all-MiniLM-L6-v2"
+    
+  # AI performance settings
+  performance:
+    max_model_memory_gb: 4              # Maximum memory per AI model (4GB)
+    enable_model_caching: true          # Keep models in memory for faster inference
+    batch_processing: true              # Process multiple images at once
+    gpu_acceleration: true              # Use GPU if available
+    
+  # Cloud AI APIs
+  cloud_apis:
+    gemini_key: "AIzaSyDdlkrx6bqL5xDuNmE-OJ9B7pYBe9OVLlo"
+    claude_key: "${CLAUDE_API_KEY}"
+    openrouter_key: "${OPENROUTER_API_KEY}"  # Currently disabled
+    openai_key: "${OPENAI_API_KEY}"
+    
+  # Routing logic for local vs cloud
+  routing:
+    importance_threshold: 0.7            # Route to cloud if importance > threshold
+    cost_limit_daily: 10.0              # Daily API cost limit (USD)
+    local_first: true                    # Try local analysis first
+    
+  # OCR settings
+  ocr:
+    engine: "tesseract"                  # tesseract or easyocr
+    languages: ["en"]                    # Language codes
+    confidence_threshold: 0.6            # Minimum confidence for text extraction
+
+# Memory system settings
+memory:
+  # Vector database
+  vector_db: "chromadb"                  # chromadb, faiss, or pinecone
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  chunk_size: 512                       # Text chunk size for embeddings
+  overlap: 50                           # Overlap between chunks
+  
+  # Traditional database
+  metadata_db: "sqlite"                 # sqlite or postgresql
+  db_path: "./data/eidolon.db"         # Database file path
+  
+  # Search settings
+  search:
+    max_results: 50                     # Maximum search results
+    similarity_threshold: 0.7           # Minimum similarity score
+    enable_semantic_search: true       # Enable vector-based search
+    enable_keyword_search: true        # Enable traditional keyword search
+
+# Interface settings
+interface:
+  # CLI settings
+  cli:
+    default_output_format: "table"      # table, json, yaml
+    show_timestamps: true               # Show timestamps in output
+    show_confidence_scores: true       # Show AI confidence scores
+    
+  # Web interface settings  
+  web:
+    enabled: false                      # Enable web interface
+    host: "localhost"                   # Web server host
+    port: 8000                          # Web server port
+    debug: false                        # Debug mode
+    
+  # API settings
+  api:
+    enabled: false                      # Enable REST API
+    rate_limit: 100                     # Requests per minute
+    auth_required: false                # Require authentication
+
+# Privacy and security settings
+privacy:
+  # Data handling
+  local_only_mode: false                # Never send data to cloud APIs
+  auto_redaction: true                  # Automatically redact sensitive info
+  data_retention_days: 365             # Keep data for this many days
+  
+  # Encryption
+  encrypt_at_rest: true                # Encrypt stored data
+  encryption_key_path: "./data/.key"   # Path to encryption key
+  
+  # User controls
+  pause_on_sensitive_apps: true        # Auto-pause on sensitive applications
+  require_confirmation_for_cloud: false # Ask before sending to cloud APIs
+
+# Logging configuration
+logging:
+  level: "INFO"                        # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file_path: "./logs/eidolon.log"     # Log file path
+  max_file_size_mb: 10                # Maximum log file size
+  backup_count: 5                     # Number of backup files to keep
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Performance monitoring (Phase 5 production readiness)
+monitoring:
+  enabled: true                       # Enable performance monitoring
+  metrics_collection_interval: 60    # Seconds between metric collection
+  alert_thresholds:
+    cpu_percent: 75.0                 # Alert if CPU usage exceeds this
+    memory_mb: 8192                   # Alert if memory usage exceeds this (8GB)
+    disk_usage_percent: 85            # Alert if disk usage exceeds this
+  
+  # Alert settings
+  alert_cooldown_minutes: 5           # Minimum time between repeat alerts
+  metrics_retention_hours: 24         # How long to keep metrics history
+  enable_email_alerts: false         # Email alerts (requires SMTP config)
+  enable_slack_alerts: false         # Slack alerts (requires webhook)
+
+# MCP Server Configuration
+mcp_server:
+  enabled: true                      # Enable MCP server
+  transport: "stdio"                 # Transport type for MCP
+  title: "eidolon-screen-memory"     # Server title
+  description: "Eidolon AI Personal Assistant with MCP support"
+  max_events_context: 10             # Maximum events to include in context
+  search_limit: 5                    # Default search result limit
+  
+  # Tool configuration
+  tools:
+    search_enabled: true             # Enable search tool
+    status_enabled: true             # Enable status tool
+    capture_enabled: true            # Enable capture tool
+    analyze_enabled: true            # Enable analyze tool
+    
+  # Performance settings
+  batch_size: 10                     # Batch size for processing
+  timeout_seconds: 30                # Tool execution timeout
+
+# Chat Configuration
+chat:
+  enabled: true                      # Enable chat functionality
+  default_model: "gemini-2.0-flash-exp"  # Default chat model
+  max_context_events: 10             # Maximum events in chat context
+  conversation_history_limit: 50     # Number of messages to retain
+  
+  # Model-specific settings
+  models:
+    gemini:
+      enabled: true
+      model_name: "gemini-2.0-flash-exp"
+      max_tokens: 8192
+      temperature: 0.7
+    claude:
+      enabled: true
+      model_name: "claude-3-opus-20240229"
+      max_tokens: 4096
+      temperature: 0.7
+    openai:
+      enabled: true
+      model_name: "gpt-4-turbo-preview"
+      max_tokens: 4096
+      temperature: 0.7
+      
+  # System prompts
+  system_prompt_template: |
+    You are Eidolon, an AI personal assistant that helps users understand their screen activity.
+    Use the provided screen capture context to answer questions about their work and activities.
+    Be helpful, concise, and accurate in your responses.
+    
+  # Chat interface settings
+  suggestions_enabled: true          # Show query suggestions
+  context_preview_length: 200        # Characters to show in context preview
+  stream_responses: true             # Stream chat responses
+  auto_save_conversations: true      # Auto-save chat history
+
+# MCP Server configuration
+mcp:
+  # Server settings
+  enabled: true                       # Enable MCP server
+  transport: "stdio"                  # Transport method (stdio, http, websocket)
+  
+  # EnrichMCP framework settings
+  title: "eidolon-mcp"
+  description: "Eidolon AI Personal Assistant - MCP Server for screen memory and intelligent analysis"
+  
+  # Feature toggles
+  enable_screen_capture: true         # Enable screen capture endpoints
+  enable_search: true                 # Enable search endpoints
+  enable_error_detection: true        # Enable error detection
+  enable_context_analysis: true       # Enable AI context analysis
+  enable_cloud_ai: true               # Allow cloud AI usage in MCP
+  
+  # Performance settings
+  max_search_results: 50              # Maximum search results per query
+  search_timeout_seconds: 30          # Search operation timeout
+  analysis_timeout_seconds: 60        # Analysis operation timeout
+  
+  # Auto-monitoring settings
+  auto_start_monitoring: false        # Start monitoring on server start
+  default_capture_interval: 10        # Default capture interval for monitoring
+  
+  # Content analysis settings
+  max_events_for_context: 10          # Maximum events to analyze for context
+  enable_command_extraction: true     # Extract commands from terminal content
+  enable_error_extraction: true       # Extract errors from all content
+  
+  # Cloud AI integration
+  preferred_provider: "claude"        # Preferred AI provider for context analysis
+  fallback_to_local: true             # Fallback to local analysis if cloud fails
+
+# Development and debugging
+development:
+  debug_mode: false                   # Enable debug features
+  mock_ai_responses: false           # Use mock responses for testing
+  save_debug_screenshots: false     # Save intermediate processing images
+  verbose_logging: false             # Extra detailed logging
+
+# Phase 6: Autonomous Agent Configuration
+autonomous_agent:
+  enabled: true                       # Enable autonomous agent functionality
+  max_concurrent_tasks: 3             # Maximum concurrent task execution
+  task_queue_size: 100               # Maximum tasks in queue
+  auto_start: false                   # Start agent automatically with server
+  
+  # Task execution settings
+  default_timeout_seconds: 300        # Default task timeout (5 minutes)
+  max_retries: 3                      # Maximum retry attempts
+  retry_delay_seconds: 5              # Delay between retries
+  
+  # Safety and approval settings
+  require_approval_by_default: true   # Require approval for all tasks by default
+  auto_approve_low_risk: false        # Auto-approve low-risk tasks
+  approval_timeout_seconds: 3600      # How long to wait for approval (1 hour)
+
+# Safety Manager Configuration
+safety:
+  enabled: true                       # Enable safety mechanisms
+  strict_mode: true                   # Enable strict safety validation
+  block_high_risk_actions: true       # Block high-risk actions entirely
+  
+  # Risk assessment settings
+  default_risk_level: "medium"        # Default risk level for unknown actions
+  risk_cache_ttl_minutes: 30          # How long to cache risk assessments
+  
+  # Action validation
+  validate_all_actions: true          # Validate all actions through safety manager
+  require_explicit_approval: true     # Require explicit approval for risky actions
+  audit_all_actions: true             # Log all actions for audit
+  
+  # Sensitive data protection
+  auto_redact_sensitive: true         # Automatically redact sensitive information
+  sensitive_data_patterns:            # Additional patterns to detect
+    - "api[_-]?token[s]?"
+    - "bearer\\s+[a-zA-Z0-9]+"
+    - "private[_-]?key"
+  
+  # User consent management
+  remember_consent: true              # Remember user consent decisions
+  consent_expiry_days: 30             # How long consent decisions last
+  revoke_consent_on_risk_change: true # Revoke consent if risk level changes
+
+# Tool Registry Configuration
+tools:
+  enabled: true                       # Enable tool system
+  auto_discover: true                 # Auto-discover tools in tool directories
+  max_concurrent_executions: 10       # Maximum concurrent tool executions
+  
+  # Tool categories and permissions
+  allowed_categories:                 # Allowed tool categories
+    - "system"
+    - "web"
+    - "communication"
+    - "file_operations"
+    - "analysis"
+  
+  blocked_tools:                      # Explicitly blocked tools
+    - "dangerous_tool"
+    
+  # Tool execution settings
+  default_timeout_seconds: 60         # Default tool timeout
+  enable_tool_chaining: true          # Allow tools to call other tools
+  max_chain_depth: 5                  # Maximum tool chain depth
+
+# Email Assistant Configuration
+email_assistant:
+  enabled: true                       # Enable email assistant
+  default_tone: "professional"        # Default email tone
+  max_recipients: 50                  # Maximum email recipients
+  
+  # Composition settings
+  use_ai_composition: true            # Use AI for email composition
+  fallback_to_templates: true         # Use templates if AI fails
+  include_signature: true             # Include signature in emails
+  
+  # Analysis settings
+  analyze_sentiment: true             # Analyze email sentiment
+  detect_urgency: true                # Detect email urgency
+  suggest_replies: true               # Suggest reply options
+  
+  # Safety settings
+  scan_for_sensitive_data: true       # Scan emails for sensitive data
+  require_approval_for_send: true     # Require approval before sending
+  max_attachment_size_mb: 25          # Maximum attachment size
+
+# Document Assistant Configuration
+document_assistant:
+  enabled: true                       # Enable document assistant
+  default_format: "markdown"          # Default document format
+  
+  # Generation settings
+  use_ai_generation: true             # Use AI for document generation
+  fallback_to_templates: true         # Use templates if AI fails
+  auto_save_generated: false          # Automatically save generated documents
+  
+  # Analysis settings
+  perform_full_analysis: true         # Perform comprehensive document analysis
+  extract_entities: true              # Extract entities from documents
+  calculate_readability: true         # Calculate readability scores
+  
+  # Template management
+  auto_load_templates: true           # Load templates automatically
+  template_directories:               # Directories to search for templates
+    - "./templates"
+    - "./docs/templates"
+  
+  # File handling
+  max_file_size_mb: 100              # Maximum file size for processing
+  allowed_extensions:                 # Allowed file extensions
+    - ".txt"
+    - ".md"
+    - ".doc"
+    - ".docx"
+    - ".pdf"
+
+# Office Assistant Configuration
+office_assistant:
+  enabled: true                       # Enable office assistant
+  automation_level: "semi_auto"       # Default automation level
+  
+  # Workflow automation
+  enable_workflows: true              # Enable workflow automation
+  auto_suggest_workflows: true        # Suggest workflows based on patterns
+  max_workflow_steps: 20              # Maximum steps in a workflow
+  
+  # Productivity analysis
+  track_productivity: true            # Track productivity metrics
+  analysis_window_days: 30            # Days of data to analyze
+  generate_insights: true             # Generate productivity insights
+  
+  # Integration settings
+  integrate_email: true               # Integrate with email assistant
+  integrate_documents: true           # Integrate with document assistant
+  integrate_calendar: false           # Calendar integration (not implemented)
+  
+  # Scheduling and automation
+  enable_scheduling: true             # Enable task scheduling
+  max_scheduled_tasks: 100           # Maximum scheduled tasks
+  cleanup_completed_tasks: true      # Clean up completed tasks automatically
+
+# Enhanced MCP Server Configuration for Phase 6
+mcp_server_phase6:
+  # Action execution endpoints
+  enable_action_execution: true       # Enable action execution endpoints
+  enable_task_management: true        # Enable task management endpoints
+  enable_assistant_endpoints: true    # Enable assistant endpoints
+  
+  # Task scheduling
+  enable_task_scheduling: true        # Enable task scheduling via MCP
+  schedule_check_interval: 60         # Seconds between schedule checks
+  max_scheduled_tasks: 50             # Maximum scheduled tasks via MCP
+  
+  # Safety integration
+  enforce_safety_validation: true     # Enforce safety validation for all MCP actions
+  require_approval_via_mcp: true      # Require approval for risky actions via MCP
+  
+  # Performance and limits
+  max_concurrent_actions: 5           # Maximum concurrent action executions
+  action_timeout_seconds: 300         # Timeout for action execution
+  enable_action_caching: true         # Cache action results
+  cache_ttl_minutes: 15              # Cache time-to-live
+
+# Workflow Definitions
+workflows:
+  # Daily automation workflows
+  daily_email_digest:
+    enabled: true
+    schedule: "0 9 * * *"              # 9 AM daily
+    description: "Generate daily email digest"
+    automation_level: "full_auto"
+    
+  weekly_productivity_report:
+    enabled: true
+    schedule: "0 18 * * 5"             # 6 PM Friday
+    description: "Generate weekly productivity report"
+    automation_level: "semi_auto"
+    
+  # On-demand workflows
+  meeting_preparation:
+    enabled: true
+    trigger: "manual"
+    description: "Prepare materials for upcoming meetings"
+    automation_level: "semi_auto"

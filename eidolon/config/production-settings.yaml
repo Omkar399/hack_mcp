@@ -1,0 +1,398 @@
+# Eidolon AI Personal Assistant - Production Configuration
+# Optimized settings for production deployment with enhanced security and performance
+
+# Observer settings for screenshot capture and monitoring
+observer:
+  # Screenshot capture settings (production optimized)
+  capture_interval: 15                   # Seconds between automatic screenshots (increased for performance)
+  activity_threshold: 0.1                # Change detection sensitivity (higher for production stability)
+  storage_path: "./data/screenshots"     # Path for storing captured screenshots
+  max_storage_gb: 200                    # Maximum storage space for screenshots (200GB for production)
+  
+  # Activity monitoring
+  monitor_keyboard: true                 # Monitor keyboard activity
+  monitor_mouse: true                    # Monitor mouse activity
+  monitor_window_changes: true           # Monitor window focus changes
+  
+  # Performance settings (production tuned)
+  max_cpu_percent: 15.0                  # Maximum CPU usage percentage (conservative for production)
+  max_memory_mb: 4096                    # Maximum memory usage (4GB for production stability)
+  
+  # Timing settings
+  sleep_interval_short: 2                # Short sleep interval (seconds) - increased for stability
+  sleep_interval_status: 60              # Status check sleep interval (seconds)
+  
+  # Processing thresholds (production optimized)
+  min_area_threshold: 200                # Minimum area for object detection (higher threshold)
+  text_confidence_threshold: 40          # Minimum confidence for text detection (higher quality)
+  ocr_confidence_threshold: 50           # Minimum confidence for OCR results (higher accuracy)
+  
+  # Image analysis thresholds (production tuned)
+  brightness_threshold_factor: 0.15      # Factor for adaptive brightness threshold
+  brightness_min_threshold: 30           # Minimum brightness threshold
+  brightness_max_threshold: 70           # Maximum brightness threshold
+  structural_similarity_threshold: 0.85  # Threshold for structural similarity (more sensitive)
+  histogram_similarity_threshold: 0.85   # Threshold for histogram similarity
+  motion_score_threshold: 0.15           # Threshold for motion detection
+  
+  # Change detection weights (production balanced)
+  pixel_weight: 0.3                      # Weight for pixel differences
+  structure_weight: 0.4                  # Weight for structural changes (emphasized)
+  motion_weight: 0.2                     # Weight for motion detection
+  histogram_weight: 0.1                  # Weight for histogram changes
+  
+  # Adaptive threshold factors
+  structure_adjustment_factor: 0.7       # Factor when structure similarity is low
+  histogram_adjustment_factor: 1.8       # Factor when histogram is similar but motion is low
+  
+  # Performance settings
+  cpu_check_interval: 0.5                # Interval for CPU usage checks (relaxed)
+  thread_join_timeout: 10.0              # Timeout for thread joining (increased)
+  
+  # Privacy settings (production enhanced)
+  sensitive_patterns:                    # Auto-redact these patterns
+    - "password"
+    - "api_key" 
+    - "secret"
+    - "token"
+    - "ssn"
+    - "social security"
+    - "credit_card"
+    - "credit card"
+    - "bank_account"
+    - "routing_number"
+    - "passport"
+    - "driver_license"
+    - "license_number"
+  
+  excluded_apps:                         # Don't monitor these applications
+    - "1Password"
+    - "Keychain Access"
+    - "LastPass"
+    - "Bitwarden"
+    - "KeePass"
+    - "Password Manager"
+    - "Banking"
+    - "Terminal"
+    - "iTerm"
+    - "SSH"
+
+# Analysis settings for AI processing (production optimized)
+analysis:
+  # Local AI models (production stable versions)
+  local_models:
+    vision: "microsoft/florence-2-base"
+    clip: "openai/clip-vit-base-patch32"
+    embedding: "sentence-transformers/all-MiniLM-L6-v2"
+    
+  # AI performance settings (production tuned)
+  performance:
+    max_model_memory_gb: 2              # Maximum memory per AI model (conservative)
+    enable_model_caching: true          # Keep models in memory for faster inference
+    batch_processing: true              # Process multiple images at once
+    gpu_acceleration: true              # Use GPU if available
+    model_precision: "fp16"             # Use half precision for better performance
+    
+  # Cloud AI APIs (production keys)
+  cloud_apis:
+    gemini_key: "${GEMINI_API_KEY_PROD}"
+    claude_key: "${CLAUDE_API_KEY_PROD}"
+    openrouter_key: "${OPENROUTER_API_KEY_PROD}"
+    openai_key: "${OPENAI_API_KEY_PROD}"
+    
+  # Routing logic for local vs cloud (production conservative)
+  routing:
+    importance_threshold: 0.8            # Route to cloud if importance > threshold (higher bar)
+    cost_limit_daily: 50.0              # Daily API cost limit (USD) - higher for production
+    local_first: true                    # Try local analysis first
+    fallback_enabled: true              # Enable fallback to alternative providers
+    
+  # OCR settings (production optimized)
+  ocr:
+    engine: "tesseract"                  # tesseract or easyocr
+    languages: ["en"]                    # Language codes
+    confidence_threshold: 0.7            # Minimum confidence for text extraction (higher)
+    preprocessing_enabled: true          # Enable image preprocessing
+    
+  # Content filtering (production security)
+  content_filter:
+    enable_sensitive_detection: true     # Detect sensitive content
+    auto_redact_pii: true               # Automatically redact PII
+    content_moderation: true            # Enable content moderation
+
+# Memory system settings (production scale)
+memory:
+  # Vector database (production configuration)
+  vector_db: "chromadb"                  # chromadb, faiss, or pinecone
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  chunk_size: 256                       # Text chunk size for embeddings (smaller for precision)
+  overlap: 25                           # Overlap between chunks
+  
+  # Traditional database (production database)
+  metadata_db: "sqlite"                 # sqlite or postgresql
+  db_path: "./data/eidolon.db"         # Database file path
+  db_pool_size: 10                     # Connection pool size
+  db_timeout: 30                       # Database timeout (seconds)
+  
+  # Search settings (production tuned)
+  search:
+    max_results: 100                    # Maximum search results
+    similarity_threshold: 0.75          # Minimum similarity score (higher precision)
+    enable_semantic_search: true       # Enable vector-based search
+    enable_keyword_search: true        # Enable traditional keyword search
+    result_reranking: true              # Enable result reranking
+    
+  # Memory management (production)
+  memory_limit_mb: 1024                # Memory limit for vector operations
+  cleanup_interval_hours: 6            # Cleanup interval for old data
+  compression_enabled: true            # Enable data compression
+
+# Interface settings (production APIs)
+interface:
+  # CLI settings
+  cli:
+    default_output_format: "json"      # table, json, yaml (JSON for production)
+    show_timestamps: true               # Show timestamps in output
+    show_confidence_scores: false      # Hide confidence scores for cleaner output
+    pagination_enabled: true           # Enable result pagination
+    
+  # Web interface settings (production disabled by default)
+  web:
+    enabled: false                      # Enable web interface
+    host: "127.0.0.1"                  # Web server host (localhost only)
+    port: 8000                          # Web server port
+    debug: false                        # Debug mode (disabled for production)
+    ssl_enabled: true                   # Enable SSL/TLS
+    auth_required: true                 # Require authentication
+    
+  # API settings (production)
+  api:
+    enabled: true                       # Enable REST API
+    rate_limit: 1000                    # Requests per minute (higher for production)
+    auth_required: true                 # Require authentication
+    cors_enabled: false                 # CORS disabled for security
+    api_key_required: true              # Require API key
+
+# Privacy and security settings (production hardened)
+privacy:
+  # Data handling (production security)
+  local_only_mode: false                # Allow cloud APIs with proper consent
+  auto_redaction: true                  # Automatically redact sensitive info
+  data_retention_days: 365             # Keep data for this many days
+  audit_logging: true                  # Enable audit logging
+  
+  # Encryption (production security)
+  encrypt_at_rest: true                # Encrypt stored data
+  encryption_algorithm: "AES-256-GCM" # Encryption algorithm
+  encryption_key_path: "./data/.key"   # Path to encryption key
+  key_rotation_days: 90                # Rotate encryption keys every 90 days
+  
+  # User controls (production compliance)
+  pause_on_sensitive_apps: true        # Auto-pause on sensitive applications
+  require_confirmation_for_cloud: false # Pre-approved for production
+  data_minimization: true              # Apply data minimization principles
+  purpose_limitation: true             # Limit data use to stated purposes
+  
+  # Compliance (production requirements)
+  gdpr_compliance: true                # Enable GDPR compliance features
+  ccpa_compliance: true                # Enable CCPA compliance features
+  data_processing_consent: true        # Require explicit consent
+  privacy_by_design: true              # Apply privacy by design principles
+
+# Logging configuration (production logging)
+logging:
+  level: "INFO"                        # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file_path: "./logs/eidolon.log"     # Log file path
+  max_file_size_mb: 100               # Maximum log file size (larger for production)
+  backup_count: 10                    # Number of backup files to keep
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
+  
+  # Production logging features
+  structured_logging: true            # Enable structured JSON logging
+  log_rotation: true                  # Enable log rotation
+  remote_logging: false               # Disable remote logging by default
+  audit_trail: true                   # Enable audit trail logging
+  performance_logging: true          # Log performance metrics
+
+# Performance monitoring (production monitoring)
+monitoring:
+  enabled: true                       # Enable performance monitoring
+  metrics_collection_interval: 30    # Seconds between metric collection (more frequent)
+  
+  # Alert thresholds (production tuned)
+  alert_thresholds:
+    cpu_percent: 80.0                 # Alert if CPU usage exceeds this
+    memory_mb: 6144                   # Alert if memory usage exceeds this (6GB)
+    disk_usage_percent: 90            # Alert if disk usage exceeds this
+    error_rate_percent: 5.0           # Alert if error rate exceeds this
+    response_time_ms: 2000            # Alert if response time exceeds this
+  
+  # Alert settings (production alerting)
+  alert_cooldown_minutes: 15          # Minimum time between repeat alerts
+  metrics_retention_hours: 168        # How long to keep metrics history (7 days)
+  enable_email_alerts: true          # Email alerts (configure SMTP)
+  enable_slack_alerts: true          # Slack alerts (configure webhook)
+  enable_pagerduty: false             # PagerDuty integration
+  
+  # Health checks (production)
+  health_check_interval: 60           # Health check interval (seconds)
+  enable_external_monitoring: true    # Allow external monitoring
+  metrics_export_enabled: true        # Export metrics for external systems
+  
+  # Dashboard (production monitoring dashboard)
+  dashboard_enabled: true             # Enable monitoring dashboard
+  dashboard_host: "127.0.0.1"        # Dashboard host (localhost only)
+  dashboard_port: 8080                # Dashboard port
+  dashboard_auth_required: true       # Require authentication for dashboard
+
+# Update system (production updates)
+updates:
+  auto_update: false                  # Disable automatic updates in production
+  check_interval_hours: 168           # Check for updates weekly
+  download_timeout: 600               # Download timeout (10 minutes)
+  backup_before_update: true          # Always backup before updates
+  staging_environment: true          # Use staging for testing updates
+  rollback_enabled: true              # Enable automatic rollback on failure
+  
+  # Update channels
+  update_channel: "stable"            # stable, beta, or dev
+  security_updates_auto: true         # Auto-install security updates
+  maintenance_window: "02:00-04:00"   # Maintenance window for updates
+
+# Backup system (production backups)
+backup:
+  enabled: true                       # Enable automatic backups
+  backup_interval_hours: 6            # Backup every 6 hours
+  backup_retention_days: 90           # Keep backups for 90 days
+  max_backups: 50                     # Maximum number of backups
+  compression_level: 6                # Compression level (0-9)
+  backup_location: "./backup"         # Backup directory
+  
+  # Backup types
+  full_backup_frequency: "weekly"     # Full backup frequency
+  incremental_backup_enabled: true    # Enable incremental backups
+  differential_backup_enabled: false  # Disable differential backups
+  
+  # Backup verification
+  verify_backups: true                # Verify backup integrity
+  test_restore: false                 # Test restore process (disable in prod)
+  offsite_backup: false               # Enable offsite backup replication
+  
+  # Exclusion patterns
+  exclude_patterns:
+    - "*.tmp"
+    - "*.cache"
+    - "*.lock"
+    - "__pycache__"
+    - ".DS_Store"
+    - "Thumbs.db"
+
+# MCP Server Configuration (production MCP)
+mcp_server:
+  enabled: true                      # Enable MCP server
+  transport: "stdio"                 # Transport type for MCP
+  title: "eidolon-prod-server"       # Server title
+  description: "Eidolon AI Personal Assistant - Production MCP Server"
+  max_events_context: 20             # Maximum events to include in context
+  search_limit: 10                   # Default search result limit
+  
+  # Tool configuration (production)
+  tools:
+    search_enabled: true             # Enable search tool
+    status_enabled: true             # Enable status tool
+    capture_enabled: true            # Enable capture tool
+    analyze_enabled: true            # Enable analyze tool
+    admin_tools_enabled: false      # Disable admin tools in production
+    
+  # Performance settings (production)
+  batch_size: 20                     # Batch size for processing
+  timeout_seconds: 60                # Tool execution timeout
+  rate_limiting: true                # Enable rate limiting
+  
+  # Security (production MCP security)
+  authentication_required: true      # Require authentication
+  authorization_enabled: true        # Enable authorization
+  audit_logging: true                # Enable audit logging
+
+# Chat Configuration (production chat)
+chat:
+  enabled: true                      # Enable chat functionality
+  default_model: "claude-3-opus-20240229"  # Default chat model (production grade)
+  max_context_events: 20             # Maximum events in chat context
+  conversation_history_limit: 100    # Number of messages to retain
+  
+  # Model-specific settings (production models)
+  models:
+    gemini:
+      enabled: true
+      model_name: "gemini-pro"
+      max_tokens: 8192
+      temperature: 0.3               # Lower temperature for production consistency
+    claude:
+      enabled: true
+      model_name: "claude-3-opus-20240229"
+      max_tokens: 4096
+      temperature: 0.3               # Lower temperature for production
+    openai:
+      enabled: true
+      model_name: "gpt-4"
+      max_tokens: 4096
+      temperature: 0.3               # Lower temperature for production
+      
+  # System prompts (production)
+  system_prompt_template: |
+    You are Eidolon, a professional AI personal assistant deployed in a production environment.
+    You help users understand their screen activity and provide accurate, reliable assistance.
+    Always prioritize privacy, security, and accuracy in your responses.
+    Be concise, professional, and helpful.
+    
+  # Chat interface settings (production)
+  suggestions_enabled: false          # Disable suggestions for production focus
+  context_preview_length: 150        # Shorter preview for production
+  stream_responses: false             # Disable streaming for production reliability
+  auto_save_conversations: true      # Auto-save chat history
+  conversation_encryption: true      # Encrypt conversation history
+  
+  # Safety and moderation (production)
+  content_moderation: true           # Enable content moderation
+  safety_filtering: true             # Enable safety filtering
+  pii_detection: true                # Detect and handle PII in conversations
+
+# Security settings (production security)
+security:
+  # Authentication
+  auth_method: "api_key"             # api_key, oauth, jwt
+  session_timeout_minutes: 60        # Session timeout
+  max_login_attempts: 3              # Maximum login attempts
+  account_lockout_minutes: 15        # Account lockout duration
+  
+  # API Security
+  api_rate_limiting: true            # Enable API rate limiting
+  cors_enabled: false                # CORS disabled for security
+  csrf_protection: true              # Enable CSRF protection
+  request_validation: true           # Enable request validation
+  
+  # Network Security
+  allowed_ip_ranges: []              # Restrict access to specific IP ranges
+  tls_min_version: "1.2"            # Minimum TLS version
+  certificate_validation: true       # Enable certificate validation
+  
+  # Data Security
+  encryption_in_transit: true        # Encrypt data in transit
+  encryption_at_rest: true          # Encrypt data at rest
+  secure_headers: true               # Enable security headers
+  data_sanitization: true           # Enable data sanitization
+
+# Development and debugging (production - mostly disabled)
+development:
+  debug_mode: false                   # Disable debug features
+  mock_ai_responses: false           # Use real AI responses
+  save_debug_screenshots: false     # Don't save debug images
+  verbose_logging: false             # Disable verbose logging
+  profiling_enabled: false          # Disable profiling
+  test_mode: false                   # Disable test mode
+  
+  # Development APIs (disabled in production)
+  dev_api_enabled: false             # Disable development APIs
+  hot_reload: false                  # Disable hot reload
+  debug_toolbar: false               # Disable debug toolbar
