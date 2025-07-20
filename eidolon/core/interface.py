@@ -446,6 +446,59 @@ Please provide a helpful response based on the screen capture data provided."""
         self.conversation_history.clear()
         self.logger.info("Conversation history cleared")
     
+    async def search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Search through captured content using the memory system."""
+        try:
+            # Use the memory system for semantic search
+            search_results = await self.memory_system.semantic_search(
+                query=query,
+                n_results=limit,
+                similarity_threshold=0.5
+            )
+            
+            # Convert SearchResult objects to dictionaries for CLI compatibility
+            results = []
+            for result in search_results:
+                results.append({
+                    "title": f"Screenshot {result.content_id[:8]}...",
+                    "content": result.content[:200] + "..." if len(result.content) > 200 else result.content,
+                    "timestamp": result.timestamp.strftime("%Y-%m-%d %H:%M:%S") if isinstance(result.timestamp, datetime) else str(result.timestamp),
+                    "similarity_score": result.similarity_score,
+                    "source_type": result.source_type
+                })
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Search failed: {e}")
+            return []
+    
+    async def chat(self, message: str) -> str:
+        """Process a chat message and return response."""
+        try:
+            # Add user message to conversation history
+            self.conversation_history.add_turn("user", message)
+            
+            # Process the query
+            result = await self.process_query(message)
+            
+            # Add assistant response to conversation history
+            self.conversation_history.add_turn("assistant", result.response)
+            
+            return result.response
+            
+        except Exception as e:
+            self.logger.error(f"Chat failed: {e}")
+            return f"Sorry, I encountered an error: {str(e)}"
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get interface status for CLI compatibility."""
+        return {
+            "available": bool(self.preferred_provider),
+            "provider": self.preferred_provider,
+            "conversation_turns": len(self.conversation_history.turns)
+        }
+    
     async def get_chat_status(self) -> Dict[str, Any]:
         """Get current chat system status."""
         return {

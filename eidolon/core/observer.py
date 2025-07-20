@@ -163,6 +163,10 @@ class Observer:
         
         self.logger.info("Screenshot monitoring started")
     
+    def is_monitoring(self) -> bool:
+        """Check if the observer is currently monitoring."""
+        return self._running
+    
     def stop_monitoring(self) -> None:
         """Stop the screenshot monitoring process."""
         if not self._running:

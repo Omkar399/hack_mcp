@@ -520,26 +520,31 @@ class MetadataDatabase:
     
     def get_screenshots_by_timerange(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
         """Get screenshots within a time range."""
+        return self.get_screenshots_by_time_range(start_time, end_time)
+    
+    def get_screenshots_by_time_range(self, start_time: datetime, end_time: datetime, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get screenshots within a time range (with underscores for compatibility)."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT 
-                    s.*,
-                    o.text as ocr_text,
-                    o.confidence as ocr_confidence,
-                    ca.content_type,
-                    ca.description
+                SELECT s.*, ca.content_type, ca.description
                 FROM screenshots s
-                LEFT JOIN ocr_results o ON s.id = o.screenshot_id
                 LEFT JOIN content_analysis ca ON s.id = ca.screenshot_id
                 WHERE s.timestamp BETWEEN ? AND ?
                 ORDER BY s.timestamp DESC
-            """, (start_time.isoformat(), end_time.isoformat()))
+                LIMIT ?
+            """, (start_time.isoformat(), end_time.isoformat(), limit))
             
             results = []
             for row in cursor.fetchall():
-                results.append(dict(row))
+                result = dict(row)
+                # Parse JSON fields
+                if result.get('window_info'):
+                    result['window_info'] = json.loads(result['window_info'])
+                if result.get('monitor_info'):
+                    result['monitor_info'] = json.loads(result['monitor_info'])
+                results.append(result)
             
             return results
     
@@ -573,12 +578,60 @@ class MetadataDatabase:
             
             return results
     
+    def get_content_analysis(self, screenshot_id: int) -> Optional[Dict[str, Any]]:
+        """Get content analysis for a screenshot."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM content_analysis 
+                WHERE screenshot_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (screenshot_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                result = dict(row)
+                # Parse JSON fields
+                if result.get('tags'):
+                    result['tags'] = json.loads(result['tags'])
+                if result.get('ui_elements'):
+                    result['ui_elements'] = json.loads(result['ui_elements'])
+                if result.get('metadata'):
+                    result['metadata'] = json.loads(result['metadata'])
+                return result
+            return None
+    
+    def get_ocr_result(self, screenshot_id: int) -> Optional[Dict[str, Any]]:
+        """Get OCR result for a screenshot."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM ocr_results 
+                WHERE screenshot_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (screenshot_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                result = dict(row)
+                # Parse JSON fields
+                if result.get('regions'):
+                    result['regions'] = json.loads(result['regions'])
+                return result
+            return None
+    
+    def cleanup_old_screenshots(self, days_to_keep: int) -> int:
+        """Clean up old screenshots (alias for cleanup_old_data)."""
+        return self.cleanup_old_data(days_to_keep)
+    
     def get_statistics(self) -> Dict[str, Any]:
         """Get database statistics."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Basic counts
+            # Total counts
             cursor.execute("SELECT COUNT(*) FROM screenshots")
             total_screenshots = cursor.fetchone()[0]
             
